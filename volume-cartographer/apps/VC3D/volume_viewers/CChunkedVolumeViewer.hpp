@@ -162,6 +162,7 @@ public:
     std::optional<QRectF> activeBBoxSceneRect() const override;
     void setBBoxMode(bool enabled) override;
     QuadSurface* makeBBoxFilteredSurfaceFromSceneRect(const QRectF& sceneRect) override;
+    std::optional<cv::Rect> bboxSelectionGridRect(const QRectF& sceneRect) override;
     void clearSelections() override;
 
     void renderIntersections(

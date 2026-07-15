@@ -14,6 +14,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <opencv2/core.hpp>
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -38,6 +40,11 @@ public slots:
     void onAudit(const std::string& segmentId);
     void onClean(const std::string& segmentId);
     void onDetangle(const std::string& segmentId);
+    // Selection flow: operate on grid-index ROIs of the segment (from the
+    // viewer's BBox selections). One worker job processes every ROI; each
+    // ROI's result is saved as its own new segment.
+    void onCleanRois(const std::string& segmentId, std::vector<cv::Rect> rois);
+    void onDetangleRois(const std::string& segmentId, std::vector<cv::Rect> rois);
 
 signals:
     void statusMessage(const QString& text, int timeoutMs);

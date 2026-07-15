@@ -173,6 +173,124 @@ void FiestaCommandHandler::runJob(
         }));
 }
 
+namespace
+{
+
+// Sub-range progress: maps a per-ROI [0,1] fraction into slot i of n.
+std::function<bool(float, const char*)> subProgress(
+    const std::function<bool(float, const char*)>& outer, size_t i, size_t n)
+{
+    return [&outer, i, n](float f, const char* stage) {
+        return outer((static_cast<float>(i) + f) / static_cast<float>(n), stage);
+    };
+}
+
+}  // namespace
+
+void FiestaCommandHandler::onCleanRois(
+    const std::string& segmentId, std::vector<cv::Rect> rois)
+{
+    const QString id = QString::fromStdString(segmentId);
+    runJob(
+        segmentId,
+        tr("ScrollFiesta: cleaning %1 selection(s) of %2...")
+            .arg(rois.size())
+            .arg(id),
+        [id, rois = std::move(rois)](
+            std::shared_ptr<QuadSurface> surf,
+            const std::function<bool(float, const char*)>& progress)
+            -> JobResult {
+            JobResult result;
+            result.title = tr("ScrollFiesta Clean Selection — %1").arg(id);
+            std::ostringstream details;
+            try {
+                for (size_t k = 0; k < rois.size(); ++k) {
+                    CleanupResult clean = cleanupQuadSurfaceRoi(
+                        *surf, rois[k], nullptr,
+                        subProgress(progress, k, rois.size()));
+                    const fs::path out = uniqueDir(
+                        surf->path.parent_path() /
+                        (id.toStdString() + "_fiesta_roi" + std::to_string(k) +
+                         "_clean"));
+                    clean.surface->save(out.string(), out.filename().string());
+                    result.written << QString::fromStdString(out.string());
+                    details << out.filename().string() << ": non-manifold "
+                            << clean.before.topo.n_nonmanifold_edges << " -> "
+                            << clean.after.topo.n_nonmanifold_edges << ", "
+                            << writebackSummary(clean.writeback).toStdString()
+                            << "\n";
+                }
+                result.ok = true;
+                result.summary =
+                    tr("Cleaned %1 selection(s); results saved as new "
+                       "segments.\nOriginal untouched.")
+                        .arg(rois.size());
+                result.details = QString::fromStdString(details.str());
+            } catch (const FiestaCancelled&) {
+                result.cancelled = true;
+            } catch (const std::exception& e) {
+                result.error = QString::fromUtf8(e.what());
+            }
+            return result;
+        });
+}
+
+void FiestaCommandHandler::onDetangleRois(
+    const std::string& segmentId, std::vector<cv::Rect> rois)
+{
+    const QString id = QString::fromStdString(segmentId);
+    runJob(
+        segmentId,
+        tr("ScrollFiesta: detangling %1 selection(s) of %2...")
+            .arg(rois.size())
+            .arg(id),
+        [id, rois = std::move(rois)](
+            std::shared_ptr<QuadSurface> surf,
+            const std::function<bool(float, const char*)>& progress)
+            -> JobResult {
+            JobResult result;
+            result.title = tr("ScrollFiesta Detangle Selection — %1").arg(id);
+            std::ostringstream details;
+            size_t total_pieces = 0;
+            try {
+                for (size_t k = 0; k < rois.size(); ++k) {
+                    DetangleResult det = detangleQuadSurface(
+                        *surf, rois[k], nullptr,
+                        subProgress(progress, k, rois.size()));
+                    int piece = 0;
+                    for (auto& p : det.pieces) {
+                        const fs::path out = uniqueDir(
+                            surf->path.parent_path() /
+                            (id.toStdString() + "_fiesta_roi" +
+                             std::to_string(k) + "_s" +
+                             std::to_string(piece++)));
+                        p.surface->save(out.string(),
+                                        out.filename().string());
+                        result.written
+                            << QString::fromStdString(out.string());
+                        details << out.filename().string() << ": "
+                                << writebackSummary(p.writeback)
+                                       .toStdString()
+                                << "\n";
+                    }
+                    total_pieces += det.pieces.size();
+                }
+                result.ok = true;
+                result.summary =
+                    tr("%1 selection(s) -> %2 piece(s), saved as new "
+                       "segments.\nOriginal untouched.")
+                        .arg(rois.size())
+                        .arg(total_pieces);
+                result.details = QString::fromStdString(details.str());
+            } catch (const FiestaCancelled&) {
+                result.cancelled = true;
+            } catch (const std::exception& e) {
+                result.error = QString::fromUtf8(e.what());
+            }
+            return result;
+        });
+}
+
 void FiestaCommandHandler::onAudit(const std::string& segmentId)
 {
     const QString id = QString::fromStdString(segmentId);

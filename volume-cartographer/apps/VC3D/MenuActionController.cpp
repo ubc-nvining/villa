@@ -11,6 +11,10 @@
 #include "WrapAnnotationWidget.hpp"
 #include "segmentation/SegmentationModule.hpp"
 #include "volume_viewers/CVolumeViewerView.hpp"
+#include "volume_viewers/VolumeViewerBase.hpp"
+#ifdef VC_HAVE_SCROLLFIESTA
+#include "FiestaCommandHandler.hpp"
+#endif
 #include "CommandLineToolRunner.hpp"
 #include "RemoteVolumeCachePaths.hpp"
 #include "SettingsDialog.hpp"
@@ -170,6 +174,12 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
 
     _surfaceFromSelectionAct = new QAction(QObject::tr("Surface from Selection"), this);
     connect(_surfaceFromSelectionAct, &QAction::triggered, this, &MenuActionController::surfaceFromSelection);
+#ifdef VC_HAVE_SCROLLFIESTA
+    _fiestaCleanSelectionAct = new QAction(QObject::tr("ScrollFiesta: Clean Selection"), this);
+    connect(_fiestaCleanSelectionAct, &QAction::triggered, this, &MenuActionController::fiestaCleanSelection);
+    _fiestaDetangleSelectionAct = new QAction(QObject::tr("ScrollFiesta: Detangle Selection"), this);
+    connect(_fiestaDetangleSelectionAct, &QAction::triggered, this, &MenuActionController::fiestaDetangleSelection);
+#endif
 
     _selectionClearAct = new QAction(QObject::tr("Clear"), this);
     connect(_selectionClearAct, &QAction::triggered, this, &MenuActionController::clearSelection);
@@ -239,6 +249,10 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
 
     _selectionMenu = new QMenu(QObject::tr("&Selection"), qWindow);
     _selectionMenu->addAction(_surfaceFromSelectionAct);
+#ifdef VC_HAVE_SCROLLFIESTA
+    _selectionMenu->addAction(_fiestaCleanSelectionAct);
+    _selectionMenu->addAction(_fiestaDetangleSelectionAct);
+#endif
     _selectionMenu->addAction(_selectionClearAct);
 
     _helpMenu = new QMenu(QObject::tr("&Help"), qWindow);
@@ -1346,6 +1360,70 @@ void MenuActionController::toggleCursorMirroring(bool enabled)
         return;
     }
     _window->setSegmentationCursorMirroring(enabled);
+}
+
+bool MenuActionController::collectFiestaSelectionRois(std::string& segmentId,
+                                                       std::vector<cv::Rect>& rois)
+{
+#ifdef VC_HAVE_SCROLLFIESTA
+    if (!_window || !_window->_viewerManager || !_window->_state->vpkg()) {
+        return false;
+    }
+    VolumeViewerBase* segViewer = _window->segmentationBaseViewer();
+    if (!segViewer) {
+        _window->showStatusBarMessage(QObject::tr("No Surface viewer found"), 3000);
+        return false;
+    }
+    auto sels = segViewer->selections();
+    if (sels.empty()) {
+        _window->showStatusBarMessage(
+            QObject::tr("No selections — enable Draw BBox and drag one first"), 4000);
+        return false;
+    }
+    segmentId = _window->_state->activeSurfaceId();
+    if (segmentId.empty() || !_window->_state->vpkg()->getSurface(segmentId)) {
+        _window->showStatusBarMessage(QObject::tr("Select a segmentation first"), 3000);
+        return false;
+    }
+    for (const auto& pr : sels) {
+        if (auto roi = segViewer->bboxSelectionGridRect(pr.first)) {
+            rois.push_back(*roi);
+        }
+    }
+    if (rois.empty()) {
+        _window->showStatusBarMessage(QObject::tr("Selections cover no grid cells"), 4000);
+        return false;
+    }
+    return true;
+#else
+    (void)segmentId;
+    (void)rois;
+    return false;
+#endif
+}
+
+void MenuActionController::fiestaCleanSelection()
+{
+#ifdef VC_HAVE_SCROLLFIESTA
+    std::string segmentId;
+    std::vector<cv::Rect> rois;
+    if (!collectFiestaSelectionRois(segmentId, rois)) {
+        return;
+    }
+    _window->_fiestaCommandHandler->onCleanRois(segmentId, std::move(rois));
+#endif
+}
+
+void MenuActionController::fiestaDetangleSelection()
+{
+#ifdef VC_HAVE_SCROLLFIESTA
+    std::string segmentId;
+    std::vector<cv::Rect> rois;
+    if (!collectFiestaSelectionRois(segmentId, rois)) {
+        return;
+    }
+    _window->_fiestaCommandHandler->onDetangleRois(segmentId, std::move(rois));
+#endif
 }
 
 void MenuActionController::surfaceFromSelection()

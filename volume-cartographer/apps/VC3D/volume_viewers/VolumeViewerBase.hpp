@@ -151,6 +151,15 @@ public:
     virtual std::optional<QRectF> activeBBoxSceneRect() const = 0;
     virtual void setBBoxMode(bool enabled) = 0;
     virtual QuadSurface* makeBBoxFilteredSurfaceFromSceneRect(const QRectF& sceneRect) = 0;
+    // Grid-index rect (absolute row/col frame of the segmentation surface)
+    // covered by a scene-space selection, or nullopt when not applicable.
+    // Unlike makeBBoxFilteredSurfaceFromSceneRect this keeps the selection in
+    // the SOURCE grid frame, so ROI operations preserve provenance.
+    virtual std::optional<cv::Rect> bboxSelectionGridRect(const QRectF& sceneRect)
+    {
+        (void)sceneRect;
+        return std::nullopt;
+    }
     virtual void clearSelections() = 0;
 
     // --- Intersection rendering ---

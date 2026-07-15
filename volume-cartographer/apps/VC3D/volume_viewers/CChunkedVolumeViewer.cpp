@@ -3589,6 +3589,47 @@ void CChunkedVolumeViewer::setBBoxMode(bool enabled)
     }
 }
 
+std::optional<cv::Rect> CChunkedVolumeViewer::bboxSelectionGridRect(const QRectF& sceneRect)
+{
+    // Same scene->surface->grid mapping as makeBBoxFilteredSurfaceFromSceneRect,
+    // but returns the covered grid rect instead of extracting a cropped copy —
+    // ROI operations (ScrollFiesta) run against the source grid so results
+    // keep their place in the segment's row/col frame.
+    if (_surfName != "segmentation")
+        return std::nullopt;
+
+    auto surf = _surfWeak.lock();
+    auto* quad = dynamic_cast<QuadSurface*>(surf.get());
+    if (!quad)
+        return std::nullopt;
+
+    const cv::Mat_<cv::Vec3f> src = quad->rawPoints();
+    const int h = src.rows;
+    const int w = src.cols;
+    if (h <= 0 || w <= 0)
+        return std::nullopt;
+
+    const cv::Vec2f sp0 = sceneToSurface(sceneRect.topLeft());
+    const cv::Vec2f sp1 = sceneToSurface(sceneRect.bottomRight());
+    QRectF surfRect(QPointF(sp0[0], sp0[1]), QPointF(sp1[0], sp1[1]));
+    surfRect = surfRect.normalized();
+
+    const double cx = w * 0.5;
+    const double cy = h * 0.5;
+    const cv::Vec2f scale = quad->scale();
+    if (scale[0] == 0.0f || scale[1] == 0.0f)
+        return std::nullopt;
+
+    const int i0 = std::max(0, static_cast<int>(std::floor(cx + surfRect.left() * scale[0])));
+    const int i1 = std::min(w - 1, static_cast<int>(std::ceil(cx + surfRect.right() * scale[0])));
+    const int j0 = std::max(0, static_cast<int>(std::floor(cy + surfRect.top() * scale[1])));
+    const int j1 = std::min(h - 1, static_cast<int>(std::ceil(cy + surfRect.bottom() * scale[1])));
+    if (i0 > i1 || j0 > j1)
+        return std::nullopt;
+
+    return cv::Rect(i0, j0, i1 - i0 + 1, j1 - j0 + 1);
+}
+
 QuadSurface* CChunkedVolumeViewer::makeBBoxFilteredSurfaceFromSceneRect(const QRectF& sceneRect)
 {
     if (_surfName != "segmentation")

@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include <opencv2/core.hpp>
+
 #include "vc/core/util/RemoteAuth.hpp"
 #include "OpenDataVolumePrefill.hpp"
 
@@ -62,6 +64,8 @@ private slots:
     void toggleDrawBBox(bool enabled);
     void toggleCursorMirroring(bool enabled);
     void surfaceFromSelection();
+    void fiestaCleanSelection();
+    void fiestaDetangleSelection();
     void clearSelection();
     void importObjAsPatch();
     void beginRotateSurfaceTransform();
@@ -140,7 +144,16 @@ private:
     QAction* _showConsoleAct{nullptr};
     QAction* _drawBBoxAct{nullptr};
     QAction* _mirrorCursorAct{nullptr};
+    // Shared preamble of the ScrollFiesta selection ops (needs CWindow
+    // friendship, hence a member): resolves the segmentation viewer + active
+    // segment and maps every selection to a grid ROI. Returns false with a
+    // status message when there is nothing to operate on.
+    bool collectFiestaSelectionRois(std::string& segmentId,
+                                    std::vector<cv::Rect>& rois);
+
     QAction* _surfaceFromSelectionAct{nullptr};
+    QAction* _fiestaCleanSelectionAct{nullptr};
+    QAction* _fiestaDetangleSelectionAct{nullptr};
     QAction* _selectionClearAct{nullptr};
     QAction* _importObjAct{nullptr};
     QAction* _rotateSurfaceAct{nullptr};
