@@ -12,6 +12,12 @@
 #include <string>
 #include <vector>
 
+#if defined(_MSC_VER)
+// MSVC spells the POSIX process-pipe API with a leading underscore.
+#define popen _popen
+#define pclose _pclose
+#endif
+
 namespace utils {
 
 AwsAuth AwsAuth::load(const std::string& profile)

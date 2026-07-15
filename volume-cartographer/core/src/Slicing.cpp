@@ -17,7 +17,10 @@
 #include <omp.h>
 
 #if defined(_MSC_VER)
+#include <cstring>            // std::memcpy for the __builtin_memcpy shim below
 #define VC_FORCE_INLINE __forceinline
+// MSVC has no __builtin_memcpy; std::memcpy lowers to the same inlined move.
+#define __builtin_memcpy std::memcpy
 #else
 #define VC_FORCE_INLINE __attribute__((always_inline)) inline
 #endif
