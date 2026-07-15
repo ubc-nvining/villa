@@ -108,6 +108,9 @@ target_link_libraries(vc_add_ignore_label
 add_executable(vc_obj2tifxyz src/vc_obj2tifxyz.cpp)
 target_link_libraries(vc_obj2tifxyz vc_core)
 
+add_executable(vc_mesh2tifxyz src/vc_mesh2tifxyz.cpp)
+target_link_libraries(vc_mesh2tifxyz vc_core vc_flattening)
+
 if(VC_WITH_SCROLLFIESTA)
     # Exe target name avoids colliding with the vc_fiesta bridge library;
     # the binary is still installed/run as "vc_fiesta".

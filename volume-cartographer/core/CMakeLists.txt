@@ -140,7 +140,7 @@ if(VC_USE_PCH)
     target_precompile_headers(vc_core REUSE_FROM vc_common_pch)
 endif()
 
-add_library(vc_flattening src/ABFFlattening.cpp)
+add_library(vc_flattening src/ABFFlattening.cpp src/MeshFlatten.cpp)
 target_link_libraries(vc_flattening PUBLIC vc_core OpenABF)
 
 add_library(vc_inpaint src/InpaintSurface.cpp)
