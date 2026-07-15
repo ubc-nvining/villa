@@ -60,6 +60,8 @@ set(srcs
     AtlasControlPointsTypes.hpp
     SegmentationCommandHandler.cpp
     SegmentationCommandHandler.hpp
+    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaCommandHandler.cpp>
+    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaCommandHandler.hpp>
     volume_viewers/annotation_tools/SameWrapAnnotationTool.cpp
     volume_viewers/annotation_tools/SameWrapAnnotationTool.hpp
     volume_viewers/CVolumeViewerView.cpp
@@ -264,6 +266,9 @@ endif()
 target_link_libraries(VC3D
     # mimalloc first so its symbols win malloc/free resolution.
     $<$<BOOL:${mimalloc_FOUND}>:mimalloc>
+    # vc_fiesta carries VC_HAVE_SCROLLFIESTA and the scrollfiesta.h include
+    # path; the scrollfiesta library itself is loaded at runtime, not linked.
+    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:vc_fiesta>
     vc_core
     vc_atlas
     vc_lasagna

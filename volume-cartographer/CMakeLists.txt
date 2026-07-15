@@ -645,6 +645,15 @@ if(VC_BUILD_PYTHON)
     find_package(nanobind CONFIG REQUIRED)
 endif()
 
+# ScrollFiesta: fetched + built here (before the OpenMP stub block below, so
+# its subproject never sees the stub omp.h include dir), but consumed at
+# RUNTIME via dlopen — no VC3D target links it. See cmake/FetchScrollFiesta.cmake.
+option(VC_WITH_SCROLLFIESTA
+       "Fetch and build ScrollFiesta (runtime-loaded sheet detangling/cleanup)" ON)
+if(VC_WITH_SCROLLFIESTA)
+    include(cmake/FetchScrollFiesta.cmake)
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR MSVC)
     # Clang and MSVC both use the no-op OpenMP shim: -fopenmp / -openmp is never
     # enabled, so every `#pragma omp` is ignored and the omp_*() runtime calls

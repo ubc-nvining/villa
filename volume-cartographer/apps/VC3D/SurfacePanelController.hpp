@@ -147,6 +147,11 @@ signals:
     void cropBoundsRequested(const QString& segmentId);
     void slimFlattenRequested(const QString& segmentId);
     void straightenRequested(const QString& segmentId);
+    // ScrollFiesta operations (menu entries exist only in
+    // VC_HAVE_SCROLLFIESTA builds; the signals are always declared).
+    void fiestaAuditRequested(const QString& segmentId);
+    void fiestaCleanRequested(const QString& segmentId);
+    void fiestaDetangleRequested(const QString& segmentId);
     void abfFlattenRequested(const QString& segmentId);
     void recalcAreaRequested(const QStringList& segmentIds);
     void exportTifxyzChunksRequested(const QString& segmentId);

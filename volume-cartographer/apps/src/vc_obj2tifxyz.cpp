@@ -1,6 +1,7 @@
 #include "vc/core/util/Surface.hpp"
 #include "vc/core/util/QuadSurface.hpp"
 #include "vc/core/util/Slicing.hpp"
+#include "vc/core/util/GridTriangleRaster.hpp"
 #include <cctype>
 
 #include <iostream>
@@ -273,16 +274,9 @@ public:
                       << measured[0] << ", " << measured[1] << std::endl;
         }
 
-        // rasterizeTriangle evaluates edge functions in int64 on fixed-point
-        // coordinates up to (grid-1)*SUBPIXEL. Keep 2*L^2 below INT64_MAX so the
-        // signed-area computation cannot overflow. The limit (~8.4M px/axis) is
-        // far above any real tifxyz grid; tripping it means the inputs are wrong.
-        const long long max_dim = std::max(grid_size[0], grid_size[1]);
-        if (max_dim * SUBPIXEL >= 2'000'000'000LL) {
-            throw std::runtime_error(
-                "grid dimension too large for exact int64 rasterization: "
-                + std::to_string(max_dim));
-        }
+        // The exact int64 rasterizer bounds the grid dimension (~8.4M px/axis,
+        // far above any real tifxyz grid); tripping it means the inputs are wrong.
+        vc::core::util::checkRasterGridSize(cv::Size(grid_size[0], grid_size[1]));
     }
     
     QuadSurface* createQuadSurface(float mesh_units = 1.0f) {
@@ -409,66 +403,26 @@ private:
                              vertices[face.v[2]].pos };
         int vidx[3] = { face.v[0], face.v[1], face.v[2] }; // for approval grid_uv lookup
 
-        // Map UVs into grid space in double, then snap each vertex to a
-        // fixed-point sub-pixel grid. Integer edge functions then make the
-        // inclusion test exact (no float rounding, identical on every
-        // architecture); the top-left fill rule assigns each pixel that lands
-        // on a shared edge to exactly one triangle, so a grid-aligned surface
-        // is covered without the periodic gaps a float barycentric test left.
+        // Map UVs into grid space in double; the exact fixed-point scan
+        // conversion (sub-pixel snapping, integer edge functions, top-left
+        // fill rule) lives in vc/core/util/GridTriangleRaster — extracted
+        // from this file so in-process consumers share the identical
+        // crack-free coverage. Weights arrive in this caller's corner order.
         const double rx = std::max<double>(uv_max[0] - uv_min[0], 1e-12);
         const double ry = std::max<double>(uv_max[1] - uv_min[1], 1e-12);
-        long long X[3], Y[3];
-        double gx[3], gy[3];
+        cv::Vec2d g[3];
         for (int k = 0; k < 3; ++k) {
             const cv::Vec2f uv = uvs[face.vt[k]].coord;
-            gx[k] = (double(uv[0]) - uv_min[0]) / rx * (grid_size[0] - 1);
-            gy[k] = (double(uv[1]) - uv_min[1]) / ry * (grid_size[1] - 1);
-            X[k] = std::llround(gx[k] * SUBPIXEL);
-            Y[k] = std::llround(gy[k] * SUBPIXEL);
+            g[k][0] = (double(uv[0]) - uv_min[0]) / rx * (grid_size[0] - 1);
+            g[k][1] = (double(uv[1]) - uv_min[1]) / ry * (grid_size[1] - 1);
         }
 
-        // Twice the signed area. Zero -> degenerate (covers nothing).
-        // Normalize to CCW so the top-left rule has a consistent orientation.
-        long long area2 = edgeFn(X[0], Y[0], X[1], Y[1], X[2], Y[2]);
-        if (area2 == 0) {
-            return;
-        }
-        if (area2 < 0) {
-            std::swap(X[1], X[2]); std::swap(Y[1], Y[2]);
-            std::swap(pos[1], pos[2]); std::swap(vidx[1], vidx[2]);
-            area2 = -area2;
-        }
-
-        // Top-left bias per edge: a pixel exactly on an edge (w == 0) is
-        // included only when that edge is top-left. Folding the bias into the
-        // comparison turns the rule into a single (w + bias) >= 0 test.
-        const long long bias0 = isTopLeft(X[2] - X[1], Y[2] - Y[1]) ? 0 : -1; // edge B->C
-        const long long bias1 = isTopLeft(X[0] - X[2], Y[0] - Y[2]) ? 0 : -1; // edge C->A
-        const long long bias2 = isTopLeft(X[1] - X[0], Y[1] - Y[0]) ? 0 : -1; // edge A->B
-
-        // Bounding box on the pixel grid.
-        const int min_x = std::max(0, static_cast<int>(std::floor(std::min({gx[0], gx[1], gx[2]}))));
-        const int max_x = std::min(grid_size[0] - 1, static_cast<int>(std::ceil(std::max({gx[0], gx[1], gx[2]}))));
-        const int min_y = std::max(0, static_cast<int>(std::floor(std::min({gy[0], gy[1], gy[2]}))));
-        const int max_y = std::min(grid_size[1] - 1, static_cast<int>(std::ceil(std::max({gy[0], gy[1], gy[2]}))));
-
-        const double inv_area = 1.0 / static_cast<double>(area2);
-        for (int y = min_y; y <= max_y; y++) {
-            const long long Py = static_cast<long long>(y) * SUBPIXEL;
-            for (int x = min_x; x <= max_x; x++) {
-                const long long Px = static_cast<long long>(x) * SUBPIXEL;
-                const long long w0 = edgeFn(X[1], Y[1], X[2], Y[2], Px, Py); // weight of vertex 0
-                const long long w1 = edgeFn(X[2], Y[2], X[0], Y[0], Px, Py); // weight of vertex 1
-                const long long w2 = edgeFn(X[0], Y[0], X[1], Y[1], Px, Py); // weight of vertex 2
-                if ((w0 + bias0) < 0 || (w1 + bias1) < 0 || (w2 + bias2) < 0) {
-                    continue;
-                }
+        vc::core::util::rasterizeTriangleExact(
+            cv::Size(grid_size[0], grid_size[1]), g,
+            [&](int y, int x, float b0, float b1, float b2) {
                 if (points(y, x)[0] != -1) {
-                    continue; // first triangle wins
+                    return; // first triangle wins
                 }
-                const float b0 = static_cast<float>(w0 * inv_area);
-                const float b1 = static_cast<float>(w1 * inv_area);
-                const float b2 = static_cast<float>(w2 * inv_area);
                 points(y, x) = b0 * pos[0] + b1 * pos[1] + b2 * pos[2];
                 if (hasApproval()) {
                     const cv::Vec2f cr = b0 * grid_uv[vidx[0]].cr
@@ -476,8 +430,7 @@ private:
                                        + b2 * grid_uv[vidx[2]].cr;
                     out_approval(y, x) = sampleSrcApproval(cr[0], cr[1]);
                 }
-            }
-        }
+            });
     }
     
     // Nearest-neighbor sample of the source approval mask at original grid
@@ -494,22 +447,6 @@ private:
         return src_approval.at<cv::Vec3b>(row, col);
     }
 
-    // Sub-pixel resolution for fixed-point vertex snapping (8 fractional bits).
-    static constexpr long long SUBPIXEL = 256;
-
-    // Twice the signed area of triangle (A, B, P): (B-A) x (P-A). Exact in int64.
-    static long long edgeFn(long long ax, long long ay,
-                            long long bx, long long by,
-                            long long px, long long py) {
-        return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-    }
-
-    // Top-left edge predicate for the fill rule. Antisymmetric under edge
-    // reversal, so the two triangles sharing an edge make opposite choices and
-    // each on-edge pixel is claimed exactly once.
-    static bool isTopLeft(long long dx, long long dy) {
-        return dy < 0 || (dy == 0 && dx < 0);
-    }
 };
 
 int main(int argc, char *argv[])

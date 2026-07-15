@@ -31,6 +31,8 @@ add_library(vc_core
         src/HttpFetch.cpp
         src/PostProcess.cpp
         src/Geometry.cpp
+        src/GridTriangleRaster.cpp
+        src/TriMeshBridge.cpp
         src/PointCollections.cpp
         src/surface_metrics.cpp
         src/Thinning.cpp
@@ -143,6 +145,24 @@ target_link_libraries(vc_flattening PUBLIC vc_core OpenABF)
 
 add_library(vc_inpaint src/InpaintSurface.cpp)
 target_link_libraries(vc_inpaint PUBLIC vc_core PRIVATE Ceres::ceres)
+
+if(VC_WITH_SCROLLFIESTA)
+    # Bridge to the runtime-loaded ScrollFiesta library. Compiles against the
+    # fetched public header only; the DLL is resolved with dlopen/LoadLibrary
+    # at runtime (exe-adjacent first), so nothing here links `scrollfiesta`.
+    add_library(vc_fiesta
+        src/fiesta/FiestaBridge.cpp
+        src/fiesta/FiestaOps.cpp)
+    target_link_libraries(vc_fiesta PUBLIC vc_core)
+    target_include_directories(vc_fiesta PUBLIC ${VC_SCROLLFIESTA_INCLUDE_DIR})
+    target_compile_definitions(vc_fiesta PUBLIC VC_HAVE_SCROLLFIESTA=1)
+    if(NOT WIN32)
+        target_link_libraries(vc_fiesta PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    # Not a link dependency — just make sure the DLL is built and staged
+    # whenever something that can load it is built.
+    add_dependencies(vc_fiesta scrollfiesta)
+endif()
 
 add_library(vc_lasagna
     src/lasagna/Dataset.cpp

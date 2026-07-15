@@ -65,6 +65,12 @@ endfunction()
 
 vc_add_test(NAME test_smoke LIBS doctest::doctest)
 
+vc_add_test(NAME test_trimesh_bridge)
+
+if(VC_WITH_SCROLLFIESTA)
+    vc_add_test(NAME test_fiesta_bridge LIBS doctest::doctest vc_core vc_fiesta)
+endif()
+
 vc_add_test(NAME test_appendmask_render)
 
 vc_add_test(NAME test_chunked_plane_sampler_fallback)

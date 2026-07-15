@@ -148,6 +148,9 @@
 #include "AxisAlignedSliceController.hpp"
 #include "SurfaceAreaCalculator.hpp"
 #include "SegmentationCommandHandler.hpp"
+#ifdef VC_HAVE_SCROLLFIESTA
+#include "FiestaCommandHandler.hpp"
+#endif
 #include "LasagnaServiceManager.hpp"
 #include "segmentation/panels/SegmentationLasagnaPanel.hpp"
 #include "vc/core/Version.hpp"
@@ -7450,6 +7453,20 @@ void CWindow::CreateWidgets(void)
             this, [this](const QString& segmentId) {
                 _segmentationCommandHandler->onStraighten(segmentId.toStdString());
             });
+#ifdef VC_HAVE_SCROLLFIESTA
+    connect(_surfacePanel.get(), &SurfacePanelController::fiestaAuditRequested,
+            this, [this](const QString& segmentId) {
+                _fiestaCommandHandler->onAudit(segmentId.toStdString());
+            });
+    connect(_surfacePanel.get(), &SurfacePanelController::fiestaCleanRequested,
+            this, [this](const QString& segmentId) {
+                _fiestaCommandHandler->onClean(segmentId.toStdString());
+            });
+    connect(_surfacePanel.get(), &SurfacePanelController::fiestaDetangleRequested,
+            this, [this](const QString& segmentId) {
+                _fiestaCommandHandler->onDetangle(segmentId.toStdString());
+            });
+#endif
     connect(_surfacePanel.get(), &SurfacePanelController::abfFlattenRequested,
             this, [this](const QString& segmentId) {
                 _segmentationCommandHandler->onABFFlatten(segmentId.toStdString());
@@ -7664,6 +7681,19 @@ void CWindow::CreateWidgets(void)
     _segmentationGrower = std::make_unique<SegmentationGrower>(growerContext, growerCallbacks, this);
 
     _segmentationCommandHandler = std::make_unique<SegmentationCommandHandler>(this, _state, this);
+#ifdef VC_HAVE_SCROLLFIESTA
+    _fiestaCommandHandler = std::make_unique<FiestaCommandHandler>(
+        this, _surfacePanel.get(),
+        [this](const std::string& id) -> std::shared_ptr<QuadSurface> {
+            return (_state && _state->vpkg()) ? _state->vpkg()->getSurface(id)
+                                              : nullptr;
+        },
+        this);
+    connect(_fiestaCommandHandler.get(), &FiestaCommandHandler::statusMessage,
+            this, [this](const QString& text, int timeout) {
+                statusBar()->showMessage(text, timeout);
+            });
+#endif
     _segmentationCommandHandler->setCmdRunner(_cmdRunner);
     _segmentationCommandHandler->setSurfacePanel(_surfacePanel.get());
     _segmentationCommandHandler->setSegmentationGrower(_segmentationGrower.get());

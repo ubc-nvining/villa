@@ -105,6 +105,9 @@ class QTabWidget;
 class FileWatcherService;
 class AxisAlignedSliceController;
 class SegmentationCommandHandler;
+#ifdef VC_HAVE_SCROLLFIESTA
+class FiestaCommandHandler;
+#endif
 class ViewerTransformsPanel;
 class LineAnnotationController;
 class WrapAnnotationWidget;
@@ -410,6 +413,9 @@ private:
     std::unique_ptr<AxisAlignedSliceController> _axisAlignedSliceController;
     bool _maskRenderInProgress{false};
     std::unique_ptr<SegmentationCommandHandler> _segmentationCommandHandler;
+#ifdef VC_HAVE_SCROLLFIESTA
+    std::unique_ptr<FiestaCommandHandler> _fiestaCommandHandler;
+#endif
     std::unique_ptr<LineAnnotationController> _lineAnnotationController;
     // Keyboard shortcuts
     QShortcut* fCompositeViewShortcut;

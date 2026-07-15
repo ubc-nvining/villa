@@ -1364,6 +1364,26 @@ void SurfacePanelController::showContextMenu(const QPoint& pos)
         emit abfFlattenRequested(segmentId);
     });
 
+#ifdef VC_HAVE_SCROLLFIESTA
+    QMenu* fiestaMenu = contextMenu.addMenu(tr("ScrollFiesta"));
+    QAction* fiestaAuditAction = fiestaMenu->addAction(tr("Topology Audit"));
+    fiestaAuditAction->setEnabled(isCurrentFolderSegment);
+    connect(fiestaAuditAction, &QAction::triggered, this, [this, segmentId]() {
+        emit fiestaAuditRequested(segmentId);
+    });
+    QAction* fiestaCleanAction =
+        fiestaMenu->addAction(tr("Clean (repair + fill pinholes)"));
+    fiestaCleanAction->setEnabled(isCurrentFolderSegment);
+    connect(fiestaCleanAction, &QAction::triggered, this, [this, segmentId]() {
+        emit fiestaCleanRequested(segmentId);
+    });
+    QAction* fiestaDetangleAction = fiestaMenu->addAction(tr("Detangle / Split"));
+    fiestaDetangleAction->setEnabled(isCurrentFolderSegment);
+    connect(fiestaDetangleAction, &QAction::triggered, this, [this, segmentId]() {
+        emit fiestaDetangleRequested(segmentId);
+    });
+#endif
+
     contextMenu.addSeparator();
 
     QAction* exportChunksAction = contextMenu.addAction(tr("Export width-chunks (40k px)"));
