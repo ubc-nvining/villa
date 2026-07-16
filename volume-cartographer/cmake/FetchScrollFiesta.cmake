@@ -36,5 +36,13 @@ FetchContent_Declare(scrollfiesta
 FetchContent_MakeAvailable(scrollfiesta)
 set(BUILD_SHARED_LIBS ${_vc_saved_build_shared})
 
+# Stage the library next to the executables in the BUILD tree on every
+# platform (Windows DLLs already follow CMAKE_RUNTIME_OUTPUT_DIRECTORY, but
+# Linux/macOS .so/.dylib are LIBRARY artifacts and would otherwise land in
+# the _deps build dir where the exe-adjacent dlopen search cannot see them).
+set_target_properties(scrollfiesta PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # The one compile-time artifact consumers use: the public header.
 set(VC_SCROLLFIESTA_INCLUDE_DIR ${scrollfiesta_SOURCE_DIR}/include)

@@ -60,10 +60,6 @@ set(srcs
     AtlasControlPointsTypes.hpp
     SegmentationCommandHandler.cpp
     SegmentationCommandHandler.hpp
-    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaCommandHandler.cpp>
-    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaCommandHandler.hpp>
-    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaDialogs.cpp>
-    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaDialogs.hpp>
     volume_viewers/annotation_tools/SameWrapAnnotationTool.cpp
     volume_viewers/annotation_tools/SameWrapAnnotationTool.hpp
     volume_viewers/CVolumeViewerView.cpp
@@ -227,6 +223,18 @@ if(VC_ENABLE_TSAN OR VC_ENABLE_LSAN OR VC_ENABLE_UBSAN OR VC_ENABLE_ASAN)
     list(APPEND srcs "${CMAKE_SOURCE_DIR}/misc/sanitizer_config.cpp")
 endif()
 
+
+# Conditional sources use a plain list append, NOT generator expressions:
+# AUTOMOC scans genex-listed headers even when the condition is false, which
+# breaks VC_WITH_SCROLLFIESTA=OFF builds (moc of FiestaDialogs.hpp without
+# the scrollfiesta include path).
+if(VC_WITH_SCROLLFIESTA)
+    list(APPEND srcs
+        FiestaCommandHandler.cpp
+        FiestaCommandHandler.hpp
+        FiestaDialogs.cpp
+        FiestaDialogs.hpp)
+endif()
 
 add_executable(VC3D ${srcs} resources.qrc)
 

@@ -789,6 +789,23 @@ foreach(_dir IN LISTS _vc_install_dirs)
     endforeach()
 endforeach()
 
+# ScrollFiesta is FetchContent-built (so the directory walk above never sees
+# it) but must ship NEXT TO the executables: it is dlopen'ed at runtime by
+# name from the executable's directory, never linked — see
+# core/src/fiesta/FiestaBridge.cpp. On macOS that means Contents/MacOS (not
+# Frameworks: plain dlopen-by-name does not consult @rpath).
+if(VC_WITH_SCROLLFIESTA)
+    if(APPLE AND VC_BUILD_APPS)
+        install(TARGETS scrollfiesta COMPONENT vc_runtime
+                RUNTIME DESTINATION "VC3D.app/Contents/MacOS"
+                LIBRARY DESTINATION "VC3D.app/Contents/MacOS")
+    else()
+        install(TARGETS scrollfiesta COMPONENT vc_runtime
+                RUNTIME DESTINATION bin
+                LIBRARY DESTINATION lib)
+    endif()
+endif()
+
 include(${CMAKE_SOURCE_DIR}/cmake/WindowsPackaging.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/MacPackaging.cmake)
 
