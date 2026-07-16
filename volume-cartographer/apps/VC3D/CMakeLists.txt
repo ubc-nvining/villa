@@ -62,6 +62,8 @@ set(srcs
     SegmentationCommandHandler.hpp
     $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaCommandHandler.cpp>
     $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaCommandHandler.hpp>
+    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaDialogs.cpp>
+    $<$<BOOL:${VC_WITH_SCROLLFIESTA}>:FiestaDialogs.hpp>
     volume_viewers/annotation_tools/SameWrapAnnotationTool.cpp
     volume_viewers/annotation_tools/SameWrapAnnotationTool.hpp
     volume_viewers/CVolumeViewerView.cpp
