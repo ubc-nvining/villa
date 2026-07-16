@@ -85,21 +85,33 @@ quick experiments.
 The split thresholds are tuned for ScrollFiesta's native ~0.77-voxel meshes.
 A VC3D segment grid step is **~20 voxels**, so a segment converted to
 triangles has ~20-voxel edges — and **depth peel's default `min_gap` of 1.5
-voxels fires on ordinary sheet curvature at that scale.** Measured on two
-clean, already-flattened PHerc0139 published segments (both audit as genus-0
-single-boundary disks): depth peel split them into 3 and 2 pieces, while
-developability-cut, bridge-cut, and overlap-separation all correctly reported
-zero splits *when peel runs first* — but with peel disabled, overlap
-separation found ~3M spurious overlap pairs on the full coarse mesh. The
-write-back mechanics are correct (zero conflicts/unplaced/dropped); it is the
-split *decision* that is mis-scaled.
+voxels marks essentially every curved region as an inter-wrap seam at that
+scale.** Measured on two clean, already-flattened PHerc0139 published
+segments (both audit as genus-0 single-boundary disks), `vc_fiesta detangle`
+did not split them into comparable pieces — it *deleted almost the whole
+sheet*:
+
+| segment | input verts | pieces kept | verts kept | retained |
+|---|---|---|---|---|
+| 20260302000001 | 691,264 | 3 | 231 + 228 + 382 = 841 | **0.12 %** |
+| 20260422000000 | 323,216 | 2 | 338 + 276 = 614       | **0.19 %** |
+
+Depth peel classifies the curved sheet as seam, removes the seam band, and
+returns only the few surviving islands large enough to clear
+`min_comp_verts` (200). Developability-cut, bridge-cut and overlap-separation
+correctly report zero splits *when peel runs first* — but with peel disabled,
+overlap separation finds ~3M spurious overlap pairs on the full coarse mesh,
+so the whole cascade is scale-sensitive, not just peel. Write-back is correct
+throughout (zero conflicts/unplaced/dropped); the destruction is entirely in
+the split *decision*, inside the library, before write-back sees anything.
 
 **Consequence:** `Topology Audit` is safe and useful today. `Detangle` at the
-default grid resolution will over-split clean geometry and should be treated
-as experimental until the per-stage thresholds are exposed and rescaled to
-the grid (or the region is resampled to near-voxel density before meshing).
-`Clean` is a near-no-op on traced segments (they are manifold by
-construction) — its value is component culling and CDT hole fill.
+default grid resolution is **destructive** — it discards ~99.9 % of a clean
+segment — and must not be exposed to annotators until the per-stage
+thresholds are rescaled to the grid step (or the region is resampled to
+near-voxel density before meshing). `Clean` is a near-no-op on traced
+segments (they are manifold by construction) — its value is component culling
+and CDT hole fill.
 
 ```
 vc_mesh2tifxyz <in.obj> <out_tifxyz> [--source=<tifxyz>] [--scale=SX,SY] [--flatten] [--lscm-only] [--zyx]
