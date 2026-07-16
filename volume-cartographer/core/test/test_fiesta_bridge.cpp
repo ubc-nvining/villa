@@ -10,6 +10,7 @@
 #include "vc/core/util/QuadSurface.hpp"
 
 #include <cstdlib>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -93,6 +94,24 @@ TEST_CASE("fiesta runtime + ops end to end")
         CHECK(result.pieces.size() == 1);
         REQUIRE(result.pieces[0].surface);
         CHECK(result.pieces[0].writeback.validCells > 0);
+    }
+
+    SUBCASE("detangle mass-retention guard")
+    {
+        // A clean self-gating sheet retains all its mass and does not trip the
+        // guard; retainedFraction is reported.
+        DetangleResult kept = detangleQuadSurface(surf, {}, nullptr, {}, 0.5);
+        CHECK(kept.retainedFraction == doctest::Approx(1.0));
+
+        // The guard fires whenever the result keeps less than the requested
+        // fraction of the input. Demand an impossible >100% retention to
+        // exercise the throw path deterministically (independent of what the
+        // splitters happen to do to any given synthetic mesh): a normal
+        // 100%-retained result is below the 1.5 threshold, so it must throw
+        // FiestaError rather than proceed. This is the exact code path that
+        // refuses the real-data case where detangle keeps ~0.1% of a segment.
+        CHECK_THROWS_AS(
+            detangleQuadSurface(surf, {}, nullptr, {}, 1.5), FiestaError);
     }
 
     SUBCASE("progress callback cancellation")

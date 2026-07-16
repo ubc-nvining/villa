@@ -127,6 +127,7 @@ int cmdSurvey(
         csvPath = outDir / "survey.csv";
     std::ofstream csv(csvPath);
     csv << "segment,cells,verts,faces,components,boundary_loops,nm_edges,"
+           "retained,"
            "genus,is_disk,audit_s,pieces,peel,dev,bridge,overlap,detangle_s,"
            "wb_conflicts,wb_unplaced,wb_dropped,status\n";
 
@@ -143,6 +144,7 @@ int cmdSurvey(
         size_t pieces = 0;
         sf_detangle_report drep{};
         int wb_conflicts = 0, wb_unplaced = 0, wb_dropped = 0;
+        double retained = 1.0;
 
         try {
             auto surf = load_quad_from_tifxyz(dir);
@@ -159,11 +161,15 @@ int cmdSurvey(
 
                 if (detangle) {
                     auto t1 = std::chrono::steady_clock::now();
+                    // Research harness: disable the retention guard (0.0) so we
+                    // measure what the splitters actually do, rather than
+                    // refusing. The GUI / `vc_fiesta detangle` keep the guard.
                     DetangleResult det =
-                        detangleQuadSurface(*surf, {}, &detCfg);
+                        detangleQuadSurface(*surf, {}, &detCfg, {}, 0.0);
                     det_s = secondsSince(t1);
                     pieces = det.pieces.size();
                     drep = det.report;
+                    retained = det.retainedFraction;
                     int k = 0;
                     for (auto& piece : det.pieces) {
                         wb_conflicts += piece.writeback.conflictCells;
@@ -193,8 +199,9 @@ int cmdSurvey(
         if (detangle && status == "ok")
             std::cout << " | pieces=" << pieces << " (p" << drep.peel_splits
                       << "/d" << drep.dev_splits << "/b" << drep.bridge_splits
-                      << "/o" << drep.overlap_splits << ") " << std::fixed
-                      << std::setprecision(1) << det_s << "s";
+                      << "/o" << drep.overlap_splits << ") kept " << std::fixed
+                      << std::setprecision(1) << (retained * 100.0) << "% "
+                      << det_s << "s";
         if (status != "ok")
             std::cout << " [" << status << "]";
         std::cout << "\n";
@@ -202,7 +209,8 @@ int cmdSurvey(
         csv << id << "," << cells << "," << audit.topo.n_verts << ","
             << audit.topo.n_faces << "," << audit.topo.n_components << ","
             << audit.topo.n_boundary_loops << ","
-            << audit.topo.n_nonmanifold_edges << "," << audit.topo.genus << ","
+            << audit.topo.n_nonmanifold_edges << "," << retained << ","
+            << audit.topo.genus << ","
             << audit.topo.is_disk << "," << audit_s << "," << pieces << ","
             << drep.peel_splits << "," << drep.dev_splits << ","
             << drep.bridge_splits << "," << drep.overlap_splits << ","

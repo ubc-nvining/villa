@@ -107,11 +107,29 @@ the split *decision*, inside the library, before write-back sees anything.
 
 **Consequence:** `Topology Audit` is safe and useful today. `Detangle` at the
 default grid resolution is **destructive** — it discards ~99.9 % of a clean
-segment — and must not be exposed to annotators until the per-stage
-thresholds are rescaled to the grid step (or the region is resampled to
-near-voxel density before meshing). `Clean` is a near-no-op on traced
-segments (they are manifold by construction) — its value is component culling
-and CDT hole fill.
+segment. `Clean` is a near-no-op on traced segments (they are manifold by
+construction) — its value is component culling and CDT hole fill.
+
+### Guards in place
+
+- **Mass-retention guard** (`vc::fiesta::detangleQuadSurface`): if a detangle
+  keeps less than half the input mesh, the call throws `FiestaError` instead of
+  writing near-empty crumbs. The GUI shows the message in a dialog; the
+  `vc_fiesta detangle` CLI prints it and exits non-zero. `cleanupQuadSurfaceRoi`
+  has the same defensive check (fires only when no component cull was
+  requested). The research `vc_fiesta survey` disables the guard
+  (`minRetainedFraction = 0`) so it can *measure* the loss and report it
+  ("kept 0.1%").
+- **Detangle GUI hidden by default**: the per-segment "Detangle / Split" and
+  Selection "Detangle Selection" actions are gated behind the CMake option
+  `VC_FIESTA_DETANGLE_UI` (**OFF** by default). Audit and Clean are always
+  available. `vc_fiesta detangle` / `survey` remain for research regardless.
+
+The correct capability for "fix a tangled region" is to **re-mesh the region
+from the surface-prediction volume** (`sf_pipeline_run` — ScrollFiesta's native
+per-cube regime), then convert back through the flatten route. The catalog
+exposes streamable `surface-prediction-zarr` volumes for exactly this; it is
+planned, not yet implemented.
 
 ```
 vc_mesh2tifxyz <in.obj> <out_tifxyz> [--source=<tifxyz>] [--scale=SX,SY] [--flatten] [--lscm-only] [--zyx]

@@ -129,6 +129,23 @@ CleanupResult cleanupQuadSurfaceRoi(
             "topology_audit(after)");
     }
 
+    // Defensive mass-retention check: cleanup is not a splitter, so unless the
+    // caller asked to cull components it should keep essentially all of the
+    // mesh. A large unexplained loss means the op misbehaved on this input.
+    const size_t in_verts = mesh.vertices.size();
+    result.retainedFraction =
+        in_verts ? static_cast<double>(cleaned.get().n_vertices) / in_verts
+                 : 1.0;
+    if (config.cull_min_area_frac <= 0.f && result.retainedFraction < 0.25) {
+        throw FiestaError(
+            SF_ERROR,
+            "cleanup discarded " +
+                std::to_string(
+                    static_cast<int>((1.0 - result.retainedFraction) * 100)) +
+                "% of the region without a cull requested — refusing "
+                "(the operation misbehaved on this input)");
+    }
+
     util::TriMesh outMesh = toTriMesh(cleaned.get());
     const auto cells = provenanceFor(cleaned.get(), outMesh, mesh, prov);
 
@@ -144,7 +161,7 @@ CleanupResult cleanupQuadSurfaceRoi(
 
 DetangleResult detangleQuadSurface(
     QuadSurface& surf, const cv::Rect& roi, const sf_detangle_config* cfg,
-    ProgressFn progress)
+    ProgressFn progress, double minRetainedFraction)
 {
     const sf_api* api = FiestaRuntime::instance().require();
 
@@ -161,6 +178,32 @@ DetangleResult detangleQuadSurface(
     const sf_status rc = api->detangle(&in, &config, pieces.out(), &result.report);
     tramp.rethrow();
     throwOnError(api, rc, "detangle");
+
+    // Mass-retention guard. The splitters discard the seam band and every
+    // island below their size floor with no accounting; on a whole coarse
+    // curved segment that is nearly all of it. Measure retained mesh mass
+    // (summed piece vertices vs input vertices) and refuse below the
+    // threshold instead of writing back near-empty crumbs.
+    const size_t in_verts = mesh.vertices.size();
+    size_t out_verts = 0;
+    for (size_t i = 0; i < pieces.get().count; ++i)
+        out_verts += pieces.get().items[i].n_vertices;
+    result.retainedFraction =
+        in_verts ? static_cast<double>(out_verts) / in_verts : 1.0;
+
+    if (minRetainedFraction > 0.0 &&
+        result.retainedFraction < minRetainedFraction) {
+        throw FiestaError(
+            SF_ERROR,
+            "detangle kept only " +
+                std::to_string(result.retainedFraction * 100.0) +
+                "% of the region — refusing. ScrollFiesta's splitters are "
+                "per-cube, voxel-density, locally-planar operations; a whole "
+                "segment at grid resolution (~20 voxels/step) violates their "
+                "assumptions and they delete the sheet rather than partition "
+                "it. Re-mesh the region from the surface-prediction volume "
+                "instead (see docs/scrollfiesta.md).");
+    }
 
     util::WriteBackOptions wb;
     wb.channelSource = &surf;

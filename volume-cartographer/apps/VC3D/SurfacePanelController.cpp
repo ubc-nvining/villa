@@ -1377,11 +1377,15 @@ void SurfacePanelController::showContextMenu(const QPoint& pos)
     connect(fiestaCleanAction, &QAction::triggered, this, [this, segmentId]() {
         emit fiestaCleanRequested(segmentId);
     });
-    QAction* fiestaDetangleAction = fiestaMenu->addAction(tr("Detangle / Split"));
+#ifdef VC_FIESTA_DETANGLE_UI
+    // Detangle deletes whole coarse segments (ScrollFiesta's splitters are
+    // per-cube/voxel-density/locally-planar); OFF unless explicitly enabled.
+    QAction* fiestaDetangleAction = fiestaMenu->addAction(tr("Detangle / Split (experimental)"));
     fiestaDetangleAction->setEnabled(isCurrentFolderSegment);
     connect(fiestaDetangleAction, &QAction::triggered, this, [this, segmentId]() {
         emit fiestaDetangleRequested(segmentId);
     });
+#endif
 #endif
 
     contextMenu.addSeparator();

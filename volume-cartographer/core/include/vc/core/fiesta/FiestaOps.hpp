@@ -40,6 +40,8 @@ struct CleanupResult {
     core::util::WriteBackStats writeback;
     sf_cleanup_report report{};
     AuditReport before, after;
+    // output vertices / input vertices (1.0 = mass conserved).
+    double retainedFraction = 1.0;
 };
 
 // Run ScrollFiesta's cleanup bundle on a grid ROI. cfg = nullptr uses the
@@ -58,13 +60,26 @@ struct SplitPiece {
 struct DetangleResult {
     std::vector<SplitPiece> pieces;
     sf_detangle_report report{};
+    // summed output-piece vertices / input vertices. A real split conserves
+    // mass (~1.0); a value near 0 means the operation DELETED the region
+    // rather than partitioning it. See the mass-retention guard below.
+    double retainedFraction = 1.0;
 };
 
 // Run the detangle cascade (depth peel -> gated developability cut -> bridge
 // cut -> overlap separation) on a grid ROI. Each output piece becomes its own
 // QuadSurface in the source frame. cfg = nullptr uses library defaults.
+//
+// Mass-retention guard: ScrollFiesta's splitters are per-cube, voxel-density,
+// locally-planar seam REMOVERS (they discard the seam band + small islands
+// with no retention accounting). On a whole coarse curved VC3D segment they
+// delete almost everything. If the summed output keeps less than
+// minRetainedFraction of the input vertices the call throws FiestaError
+// instead of silently emitting crumbs. Pass minRetainedFraction <= 0 to
+// disable the guard (research/measurement only).
 DetangleResult detangleQuadSurface(
     QuadSurface& surf, const cv::Rect& roi = {},
-    const sf_detangle_config* cfg = nullptr, ProgressFn progress = {});
+    const sf_detangle_config* cfg = nullptr, ProgressFn progress = {},
+    double minRetainedFraction = 0.5);
 
 }  // namespace vc::fiesta

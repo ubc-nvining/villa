@@ -177,8 +177,11 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
 #ifdef VC_HAVE_SCROLLFIESTA
     _fiestaCleanSelectionAct = new QAction(QObject::tr("ScrollFiesta: Clean Selection"), this);
     connect(_fiestaCleanSelectionAct, &QAction::triggered, this, &MenuActionController::fiestaCleanSelection);
-    _fiestaDetangleSelectionAct = new QAction(QObject::tr("ScrollFiesta: Detangle Selection"), this);
+#ifdef VC_FIESTA_DETANGLE_UI
+    // Experimental + destructive on whole segments — OFF unless enabled.
+    _fiestaDetangleSelectionAct = new QAction(QObject::tr("ScrollFiesta: Detangle Selection (experimental)"), this);
     connect(_fiestaDetangleSelectionAct, &QAction::triggered, this, &MenuActionController::fiestaDetangleSelection);
+#endif
 #endif
 
     _selectionClearAct = new QAction(QObject::tr("Clear"), this);
@@ -251,7 +254,9 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
     _selectionMenu->addAction(_surfaceFromSelectionAct);
 #ifdef VC_HAVE_SCROLLFIESTA
     _selectionMenu->addAction(_fiestaCleanSelectionAct);
+#ifdef VC_FIESTA_DETANGLE_UI
     _selectionMenu->addAction(_fiestaDetangleSelectionAct);
+#endif
 #endif
     _selectionMenu->addAction(_selectionClearAct);
 

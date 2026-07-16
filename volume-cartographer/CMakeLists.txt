@@ -650,6 +650,14 @@ endif()
 # RUNTIME via dlopen — no VC3D target links it. See cmake/FetchScrollFiesta.cmake.
 option(VC_WITH_SCROLLFIESTA
        "Fetch and build ScrollFiesta (runtime-loaded sheet detangling/cleanup)" ON)
+# ScrollFiesta's mesh splitters assume per-cube, voxel-density, locally-planar
+# input; on a whole coarse VC3D segment they delete the sheet (see
+# docs/scrollfiesta.md). The detangle GUI actions are therefore OFF by default
+# and gated behind this flag until the volume-remesh path lands. The
+# retention guard in vc::fiesta still protects them if enabled, and the
+# vc_fiesta CLI keeps detangle for research.
+option(VC_FIESTA_DETANGLE_UI
+       "Expose the (experimental, destructive on whole segments) ScrollFiesta detangle GUI actions" OFF)
 if(VC_WITH_SCROLLFIESTA)
     include(cmake/FetchScrollFiesta.cmake)
 endif()
