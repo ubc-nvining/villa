@@ -111,6 +111,15 @@ target_link_libraries(vc_obj2tifxyz vc_core)
 add_executable(vc_mesh2tifxyz src/vc_mesh2tifxyz.cpp)
 target_link_libraries(vc_mesh2tifxyz vc_core vc_flattening)
 
+# Open-data catalog CLI: reuses the GUI's Qt-free manifest + segment-cache
+# engine TUs directly (they live under apps/VC3D but have no Qt includes).
+add_executable(vc_opendata src/vc_opendata.cpp
+    VC3D/OpenDataManifest.cpp
+    VC3D/OpenDataSegmentCache.cpp
+    VC3D/OpenDataSegmentCacheIO.cpp)
+target_include_directories(vc_opendata PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/VC3D)
+target_link_libraries(vc_opendata vc_core TIFF::TIFF)
+
 if(VC_WITH_SCROLLFIESTA)
     # Exe target name avoids colliding with the vc_fiesta bridge library;
     # the binary is still installed/run as "vc_fiesta".

@@ -59,6 +59,49 @@ emits `PROGRESS <pct> <stage>` lines. Exit codes: 0 ok, 1 usage, 2 failed,
 3 cancelled.
 
 ```
+vc_fiesta survey <tree> [out] [--detangle] [--csv=FILE] [--max-cells=N]
+                 [--no-peel] [--no-dev] [--no-bridge] [--no-overlap]
+```
+Batch audit (and optional detangle) over every materialized tifxyz segment
+under `<tree>`, writing a per-segment CSV (verts/faces/components/loops/
+non-manifold/genus/timings; with `--detangle`, piece counts per stage and
+write-back warnings). This is the harness for evaluating the ops on real
+data; the stage toggles let you A/B a single splitter. Segments above
+`--max-cells` (default 6M) are skipped.
+
+```
+vc_opendata list                    [--json] [--manifest=<url|file>]
+vc_opendata segments <sampleId>     [--json] [--cache=<dir>]
+vc_opendata pull     <sampleId> [segmentId...] [--smallest=N] [--cache=<dir>] [--force]
+```
+Lists the streamable open-data volpkgs from the hosted manifest and pulls
+their tifxyz segments to a local cache using VC3D's own segment-cache engine
+(so the pulled dir has a correctly synthesized `meta.json` and is usable by
+every `vc_*` tool). `--smallest=N` grabs the N smallest segments — handy for
+quick experiments.
+
+## Calibration caveat for the region/detangle ops (important)
+
+The split thresholds are tuned for ScrollFiesta's native ~0.77-voxel meshes.
+A VC3D segment grid step is **~20 voxels**, so a segment converted to
+triangles has ~20-voxel edges — and **depth peel's default `min_gap` of 1.5
+voxels fires on ordinary sheet curvature at that scale.** Measured on two
+clean, already-flattened PHerc0139 published segments (both audit as genus-0
+single-boundary disks): depth peel split them into 3 and 2 pieces, while
+developability-cut, bridge-cut, and overlap-separation all correctly reported
+zero splits *when peel runs first* — but with peel disabled, overlap
+separation found ~3M spurious overlap pairs on the full coarse mesh. The
+write-back mechanics are correct (zero conflicts/unplaced/dropped); it is the
+split *decision* that is mis-scaled.
+
+**Consequence:** `Topology Audit` is safe and useful today. `Detangle` at the
+default grid resolution will over-split clean geometry and should be treated
+as experimental until the per-stage thresholds are exposed and rescaled to
+the grid (or the region is resampled to near-voxel density before meshing).
+`Clean` is a near-no-op on traced segments (they are manifold by
+construction) — its value is component culling and CDT hole fill.
+
+```
 vc_mesh2tifxyz <in.obj> <out_tifxyz> [--source=<tifxyz>] [--scale=SX,SY] [--flatten] [--lscm-only] [--zyx]
 ```
 Turns an arbitrary triangle mesh into a tifxyz segment, choosing the route
