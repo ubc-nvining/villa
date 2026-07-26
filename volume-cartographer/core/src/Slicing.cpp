@@ -25,6 +25,13 @@
 #define VC_FORCE_INLINE __attribute__((always_inline)) inline
 #endif
 
+// __has_builtin is a Clang/GCC/modern-MSVC (VS2019 16.1+) feature-test operator,
+// but older or exotic preprocessors don't provide it. Define a fallback so the
+// __builtin_nontemporal_store checks below degrade to the portable store.
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
 namespace {
 
 using vc::render::ChunkKey;
