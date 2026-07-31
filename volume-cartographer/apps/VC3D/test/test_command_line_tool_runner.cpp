@@ -1,8 +1,12 @@
 #include <csignal>
 
 #include <QApplication>
+#include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QScopeGuard>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QThread>
 #include <QtTest/QtTest>
@@ -75,8 +79,17 @@ int runChild(const QStringList& arguments)
         QThread::sleep(30);
         return 0;
     }
+    if (mode == "cooperative-wait" && marker + 2 < arguments.size()) {
+        const QString cancelPath = arguments.at(marker + 2);
+        for (int i = 0; i < 500; ++i) {
+            if (QFileInfo::exists(cancelPath))
+                return 3;
+            QThread::msleep(10);
+        }
+        return 0;
+    }
     if (mode == "crash") {
-        std::raise(SIGKILL);
+        std::raise(SIGABRT);
         return 1;
     }
     if (mode == "write-omp" && marker + 2 < arguments.size()) {
@@ -124,13 +137,19 @@ private slots:
         expectSingleCompletion(finished);
 
         QVERIFY(!completionSucceeded(finished));
+#ifdef Q_OS_WIN
+        QVERIFY(completionMessage(finished).contains("failed", Qt::CaseInsensitive));
+#else
         QVERIFY(completionMessage(finished).contains("crash", Qt::CaseInsensitive));
+#endif
         QVERIFY(!runner.isRunning());
     }
 
     void failedStartFinishesOnce()
     {
-        QTemporaryFile invalidProgram;
+        QTemporaryFile invalidProgram(
+            QDir(QDir::tempPath()).filePath(
+                "invalid_command_runner_XXXXXX.exe"));
         QVERIFY(invalidProgram.open());
         invalidProgram.write("#!/definitely/missing/command-runner-interpreter\n");
         invalidProgram.close();
@@ -168,6 +187,57 @@ private slots:
         QVERIFY(startHelper(runner, "success"));
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 3000);
         QVERIFY(completionSucceeded(finished, 1));
+    }
+
+    void cooperativeCancelCreatesAndCleansMarker()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString cancelPath = temp.filePath("cancel.marker");
+
+        CommandLineToolRunner runner(nullptr, {});
+        QSignalSpy finished(&runner, &CommandLineToolRunner::toolFinished);
+        runner.setNextCancellationFile(cancelPath);
+        QVERIFY(startHelper(
+            runner, "cooperative-wait",
+            CommandLineToolRunner::ExecutionOptions::silent(), cancelPath));
+        QTRY_VERIFY_WITH_TIMEOUT(runner.isRunning(), 1000);
+        QElapsedTimer elapsed;
+        elapsed.start();
+        runner.cancel();
+        expectSingleCompletion(finished);
+
+        QVERIFY(!completionSucceeded(finished));
+        QVERIFY2(elapsed.elapsed() < 3000,
+                 "cooperative child did not observe the cancellation marker");
+        QVERIFY(!runner.isRunning());
+        QVERIFY(!QFileInfo::exists(cancelPath));
+    }
+
+    void cooperativeCancelFallsBackWhenMarkerCannotBeCreated()
+    {
+        QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString cancelPath =
+            temp.filePath("missing-parent/cancel.marker");
+
+        CommandLineToolRunner runner(nullptr, {});
+        QSignalSpy finished(&runner, &CommandLineToolRunner::toolFinished);
+        runner.setNextCancellationFile(cancelPath);
+        QVERIFY(startHelper(
+            runner, "cooperative-wait",
+            CommandLineToolRunner::ExecutionOptions::silent(), cancelPath));
+        QTRY_VERIFY_WITH_TIMEOUT(runner.isRunning(), 1000);
+        QElapsedTimer elapsed;
+        elapsed.start();
+        runner.cancel();
+        expectSingleCompletion(finished);
+
+        QVERIFY(!completionSucceeded(finished));
+        QVERIFY2(elapsed.elapsed() < 3000,
+                 "failed marker write did not fall back to process termination");
+        QVERIFY(!runner.isRunning());
+        QVERIFY(!QFileInfo::exists(cancelPath));
     }
 
     void pendingProcessErrorOverridesCleanExit()

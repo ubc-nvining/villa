@@ -83,6 +83,10 @@ public:
                              const QStringList& args,
                              const QString& label = QString(),
                              ExecutionOptions options = {});
+    // Optional cooperative-cancellation marker for the next process. cancel()
+    // creates this file instead of terminating the process, allowing tools that
+    // support the contract to remove staged/atomic outputs before exiting.
+    void setNextCancellationFile(const QString& path);
 
     // tool specific params 
     void setRenderParams(float scale, int resolution, int layers);
@@ -237,6 +241,8 @@ private:
     QString _customCommand;
     QStringList _customArgs;
     QString _customLabel;
+    QString _nextCancellationFile;
+    QString _activeCancellationFile;
 
     QFile* _logFile;
     QTextStream* _logStream;

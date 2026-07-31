@@ -1,17 +1,29 @@
 #include "FiestaCommandHandler.hpp"
 
 #include "FiestaDialogs.hpp"
+#include "CommandLineToolRunner.hpp"
 #include "SurfacePanelController.hpp"
 
 #include "vc/core/fiesta/FiestaOps.hpp"
 #include "vc/core/util/QuadSurface.hpp"
 
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QFutureWatcher>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMessageBox>
 #include <QProgressDialog>
+#include <QRegularExpression>
+#include <QUuid>
 #include <QtConcurrent/QtConcurrent>
 
 #include <atomic>
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <sstream>
 
@@ -104,11 +116,13 @@ bool overwriteRegion(
 
 FiestaCommandHandler::FiestaCommandHandler(
     QWidget* parentWidget, SurfacePanelController* surfacePanel,
-    SurfaceResolver resolver, QObject* parent)
+    SurfaceResolver resolver, HintContextResolver hintContextResolver,
+    QObject* parent)
     : QObject(parent)
     , _parentWidget(parentWidget)
     , _surfacePanel(surfacePanel)
     , _resolver(std::move(resolver))
+    , _hintContextResolver(std::move(hintContextResolver))
 {
 }
 
@@ -397,95 +411,298 @@ void FiestaCommandHandler::onDetangle(const std::string& segmentId)
         });
 }
 
-void FiestaCommandHandler::onCleanRois(
+void FiestaCommandHandler::onGenerateSpiralHints(
     const std::string& segmentId, std::vector<cv::Rect> rois)
 {
     if (!ensureAvailable())
         return;
+    if (_busy) {
+        QMessageBox::warning(
+            _parentWidget, tr("ScrollFiesta"),
+            tr("A ScrollFiesta operation is already running."));
+        return;
+    }
+    if (!_cmdRunner) {
+        QMessageBox::critical(
+            _parentWidget, tr("ScrollFiesta"),
+            tr("The external-tool runner is not available."));
+        return;
+    }
+    if (rois.empty()) {
+        QMessageBox::warning(
+            _parentWidget, tr("ScrollFiesta"),
+            tr("Draw at least one rectangular selection first."));
+        return;
+    }
+
+    std::shared_ptr<QuadSurface> surf =
+        _resolver ? _resolver(segmentId) : nullptr;
+    if (!surf || surf->path.empty()) {
+        QMessageBox::warning(
+            _parentWidget, tr("ScrollFiesta"),
+            tr("Segment '%1' does not resolve to an on-disk TIFXYZ directory.")
+                .arg(QString::fromStdString(segmentId)));
+        return;
+    }
+
+    const auto bbox = surf->bbox();
+    const std::array<double, 3> suggestedAxisPointZyx{
+        0.5 * (static_cast<double>(bbox.low[2]) + bbox.high[2]),
+        0.5 * (static_cast<double>(bbox.low[1]) + bbox.high[1]),
+        0.5 * (static_cast<double>(bbox.low[0]) + bbox.high[0])};
     FiestaCleanDialog dlg(
-        _parentWidget, FiestaRuntime::instance().api(), /*allowInPlace=*/true);
+        _parentWidget, FiestaRuntime::instance().api(), /*allowInPlace=*/false,
+        suggestedAxisPointZyx);
     if (dlg.exec() != QDialog::Accepted)
         return;
     const sf_cleanup_config cfg = dlg.config();
-    const bool overwrite = dlg.overwriteOriginal();
 
-    const QString id = QString::fromStdString(segmentId);
-    runJob(
-        segmentId,
-        tr("ScrollFiesta: cleaning %1 selection(s) of %2...")
+    QString sourcePath = QString::fromStdString(surf->path.string());
+    QString outputRoot =
+        QString::fromStdString(surf->path.parent_path().string());
+    QString sourceId = QString::fromStdString(segmentId);
+    QString safeId = sourceId;
+    safeId.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]+")),
+                   QStringLiteral("_"));
+    const QString runId =
+        safeId + QStringLiteral("_scroll_hint_") +
+        QDateTime::currentDateTimeUtc().toString(
+            QStringLiteral("yyyyMMdd'T'HHmmss'Z'"));
+    _externalManifestPath = QDir(outputRoot).filePath(
+        runId + QStringLiteral(".scrollfiesta-hints.json"));
+    const QString cancelPath = QDir(QDir::tempPath()).filePath(
+        QStringLiteral("vc3d-scrollfiesta-%1.cancel")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+
+    QString executable = QDir(QCoreApplication::applicationDirPath()).filePath(
+#ifdef Q_OS_WIN
+        QStringLiteral("vc_fiesta.exe")
+#else
+        QStringLiteral("vc_fiesta")
+#endif
+    );
+    QStringList args{
+        QStringLiteral("hints"),
+        sourcePath,
+        outputRoot,
+        QStringLiteral("--id-prefix=%1").arg(runId),
+        QStringLiteral("--json=%1").arg(_externalManifestPath),
+        QStringLiteral("--cancel-file=%1").arg(cancelPath),
+        QStringLiteral("--axis-point-zyx=%1").arg(dlg.axisPointZyx()),
+        QStringLiteral("--axis-direction-zyx=%1").arg(dlg.axisDirectionZyx()),
+        QStringLiteral("--wrap-spacing=%1")
+            .arg(dlg.wrapSpacing(), 0, 'g', 17),
+        QStringLiteral("--manifold=%1").arg(cfg.manifold_repair ? 1 : 0),
+        QStringLiteral("--pinholes=%1").arg(cfg.fill_pinholes ? 1 : 0),
+        QStringLiteral("--sliver=%1").arg(cfg.sliver_cleanup ? 1 : 0),
+        QStringLiteral("--cull-frac=%1")
+            .arg(cfg.cull_min_area_frac, 0, 'g', 9),
+        QStringLiteral("--progress")};
+    for (const auto& roi : rois) {
+        args << QStringLiteral("--roi=%1,%2,%3,%4")
+                    .arg(roi.x)
+                    .arg(roi.y)
+                    .arg(roi.width)
+                    .arg(roi.height);
+    }
+
+    const HintContext context =
+        _hintContextResolver ? _hintContextResolver() : HintContext{};
+    if (!context.volumeId.isEmpty())
+        args << QStringLiteral("--volume-id=%1").arg(context.volumeId);
+    if (!context.volumeLocation.isEmpty())
+        args << QStringLiteral("--volume-location=%1")
+                    .arg(context.volumeLocation);
+    if (context.voxelSize > 0.0)
+        args << QStringLiteral("--voxel-size=%1")
+                    .arg(context.voxelSize, 0, 'g', 17);
+    for (const auto& tag : context.volumeTags)
+        args << QStringLiteral("--volume-tag=%1").arg(tag);
+
+    _busy = true;
+    _externalCancelRequested = false;
+    _externalAddToCurrentFit = dlg.addToCurrentFit();
+    _externalLineBuffer.clear();
+    _externalOutputTail.clear();
+    emit statusMessage(
+        tr("ScrollFiesta: generating %1 spiral hint(s) from %2...")
             .arg(rois.size())
-            .arg(id),
-        [id, cfg, overwrite, rois = std::move(rois)](
-            std::shared_ptr<QuadSurface> surf,
-            const std::function<bool(float, const char*)>& progress)
-            -> JobResult {
-            JobResult result;
-            result.title = tr("ScrollFiesta Clean Selection — %1").arg(id);
-            std::ostringstream details;
-            try {
-                if (overwrite)
-                    surf->saveSnapshot(-1, /*force=*/true);
-                for (size_t k = 0; k < rois.size(); ++k) {
-                    CleanupResult clean = cleanupQuadSurfaceRoi(
-                        *surf, rois[k], &cfg,
-                        subProgress(progress, k, rois.size()));
-                    if (overwrite) {
-                        if (!overwriteRegion(
-                                *surf, *clean.surface, clean.writeback.rect))
-                            throw std::runtime_error(
-                                "could not write a selection back into the grid");
-                        details << "selection " << k << ": non-manifold "
-                                << clean.before.topo.n_nonmanifold_edges
-                                << " -> "
-                                << clean.after.topo.n_nonmanifold_edges << ", "
-                                << writebackSummary(clean.writeback)
-                                       .toStdString()
-                                << "\n";
-                    } else {
-                        const fs::path out = uniqueDir(
-                            surf->path.parent_path() /
-                            (id.toStdString() + "_fiesta_roi" +
-                             std::to_string(k) + "_clean"));
-                        tagFiestaSegment(
-                            *clean.surface, "fiesta-clean", id, "clean",
-                            static_cast<int>(k));
-                        clean.surface->save(
-                            out.string(), out.filename().string());
-                        result.written
-                            << QString::fromStdString(out.string());
-                        details << out.filename().string()
-                                << ": non-manifold "
-                                << clean.before.topo.n_nonmanifold_edges
-                                << " -> "
-                                << clean.after.topo.n_nonmanifold_edges << ", "
-                                << writebackSummary(clean.writeback)
-                                       .toStdString()
-                                << "\n";
-                    }
+            .arg(sourceId),
+        0);
+
+    auto* progress = new QProgressDialog(
+        tr("Generating %1 unverified spiral hint(s)...").arg(rois.size()),
+        tr("Cancel"), 0, 100, _parentWidget);
+    progress->setWindowTitle(tr("ScrollFiesta Spiral Hints"));
+    progress->setWindowModality(Qt::NonModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setValue(0);
+    progress->setAttribute(Qt::WA_DeleteOnClose);
+    _externalProgress = progress;
+    connect(progress, &QProgressDialog::canceled, this, [this]() {
+        if (_externalCancelRequested)
+            return;
+        _externalCancelRequested = true;
+        if (_externalProgress) {
+            _externalProgress->setLabelText(
+                tr("Cancelling safely; cleaning staged outputs..."));
+        }
+        if (_cmdRunner)
+            _cmdRunner->cancel();
+    });
+
+    _externalOutputConnection = connect(
+        _cmdRunner, &CommandLineToolRunner::consoleOutputReceived, this,
+        [this](const QString& chunk) {
+            _externalOutputTail += chunk;
+            if (_externalOutputTail.size() > 16000)
+                _externalOutputTail = _externalOutputTail.right(16000);
+            _externalLineBuffer += chunk;
+            int newline = -1;
+            static const QRegularExpression progressLine(
+                QStringLiteral("^PROGRESS\\s+(\\d+)\\s*(.*)$"));
+            while ((newline = _externalLineBuffer.indexOf('\n')) >= 0) {
+                QString line = _externalLineBuffer.left(newline).trimmed();
+                _externalLineBuffer.remove(0, newline + 1);
+                const auto match = progressLine.match(line);
+                if (match.hasMatch() && _externalProgress) {
+                    _externalProgress->setValue(
+                        std::clamp(match.captured(1).toInt(), 0, 100));
+                    const QString stage = match.captured(2).trimmed();
+                    if (!stage.isEmpty())
+                        _externalProgress->setLabelText(stage);
                 }
-                if (overwrite) {
-                    surf->saveOverwrite();
-                    result.written
-                        << QString::fromStdString(surf->path.string());
-                    result.summary =
-                        tr("Cleaned %1 selection(s) in place (disk backup "
-                           "saved — right-click → Reload from backup to undo).")
-                            .arg(rois.size());
-                } else {
-                    result.summary =
-                        tr("Cleaned %1 selection(s); results saved as new "
-                           "segments.\nOriginal untouched.")
-                            .arg(rois.size());
-                }
-                result.ok = true;
-                result.details = QString::fromStdString(details.str());
-            } catch (const FiestaCancelled&) {
-                result.cancelled = true;
-            } catch (const std::exception& e) {
-                result.error = QString::fromUtf8(e.what());
             }
-            return result;
         });
+
+    _externalFinishedConnection = connect(
+        _cmdRunner, &CommandLineToolRunner::toolFinished, this,
+        [this, sourceId](CommandLineToolRunner::Tool tool, bool success,
+                         const QString& message, const QString&, bool) {
+            if (tool != CommandLineToolRunner::Tool::CustomCommand)
+                return;
+            disconnect(_externalOutputConnection);
+            disconnect(_externalFinishedConnection);
+            if (_externalProgress) {
+                if (success)
+                    _externalProgress->setValue(100);
+                _externalProgress->close();
+            }
+            _busy = false;
+
+            if (_externalCancelRequested && !success) {
+                emit statusMessage(
+                    tr("ScrollFiesta spiral hints cancelled — nothing written"),
+                    5000);
+                return;
+            }
+            if (!success) {
+                emit statusMessage(tr("ScrollFiesta spiral hints failed"), 5000);
+                QMessageBox box(
+                    QMessageBox::Critical, tr("ScrollFiesta Spiral Hints"),
+                    message, QMessageBox::Ok, _parentWidget);
+                if (!_externalOutputTail.trimmed().isEmpty())
+                    box.setDetailedText(_externalOutputTail.trimmed());
+                box.exec();
+                return;
+            }
+
+            QFile manifestFile(_externalManifestPath);
+            if (!manifestFile.open(QIODevice::ReadOnly)) {
+                QMessageBox::critical(
+                    _parentWidget, tr("ScrollFiesta Spiral Hints"),
+                    tr("The job succeeded but its manifest could not be read:\n%1")
+                        .arg(_externalManifestPath));
+                return;
+            }
+            QJsonParseError parseError;
+            const QJsonDocument manifest = QJsonDocument::fromJson(
+                manifestFile.readAll(), &parseError);
+            if (parseError.error != QJsonParseError::NoError ||
+                !manifest.isObject() ||
+                manifest.object().value(QStringLiteral("schema")).toString() !=
+                    QStringLiteral("vc3d-scrollfiesta-hints-v1")) {
+                QMessageBox::critical(
+                    _parentWidget, tr("ScrollFiesta Spiral Hints"),
+                    tr("The job produced an invalid hint manifest:\n%1\n\n%2")
+                        .arg(_externalManifestPath, parseError.errorString()));
+                return;
+            }
+
+            QStringList ids;
+            QStringList paths;
+            QStringList details;
+            const QJsonArray outputs = manifest.object()
+                                           .value(QStringLiteral("outputs"))
+                                           .toArray();
+            for (const auto& value : outputs) {
+                const QJsonObject entry = value.toObject();
+                const QString id = entry.value(QStringLiteral("id")).toString();
+                const QString path =
+                    entry.value(QStringLiteral("path")).toString();
+                if (id.isEmpty() || path.isEmpty())
+                    continue;
+                ids << id;
+                paths << path;
+                const auto writeback =
+                    entry.value(QStringLiteral("writeback")).toObject();
+                details << tr("%1 — %2 valid cells\n%3")
+                               .arg(id)
+                               .arg(writeback.value(
+                                        QStringLiteral("valid_cells"))
+                                        .toVariant()
+                                        .toULongLong())
+                               .arg(path);
+            }
+            if (ids.isEmpty()) {
+                QMessageBox::critical(
+                    _parentWidget, tr("ScrollFiesta Spiral Hints"),
+                    tr("The manifest contains no importable outputs."));
+                return;
+            }
+
+            if (_surfacePanel) {
+                _surfacePanel->reloadSurfacesFromDisk();
+                QString activationError;
+                _surfacePanel->activateSurfaceById(
+                    ids.front().toStdString(), &activationError);
+            }
+            emit spiralHintsGenerated(ids, paths, _externalAddToCurrentFit);
+            emit statusMessage(
+                tr("Generated and imported %1 unverified spiral hint(s)")
+                    .arg(ids.size()),
+                5000);
+
+            QMessageBox box(
+                QMessageBox::Information, tr("ScrollFiesta Spiral Hints"),
+                tr("Generated %1 unverified spiral hint(s) from %2.\n"
+                   "Source untouched; first hint activated in VC3D.%3")
+                    .arg(ids.size())
+                    .arg(sourceId)
+                    .arg(_externalAddToCurrentFit
+                             ? tr("\nHints were offered to the current Spiral fit.")
+                             : QString()),
+                QMessageBox::Ok, _parentWidget);
+            box.setDetailedText(
+                details.join(QStringLiteral("\n\n")) +
+                tr("\n\nManifest:\n%1").arg(_externalManifestPath));
+            box.exec();
+        });
+
+    _cmdRunner->setNextCancellationFile(cancelPath);
+    if (!_cmdRunner->executeCustomCommand(
+            executable, args, tr("ScrollFiesta spiral hints"),
+            CommandLineToolRunner::ExecutionOptions::silent())) {
+        disconnect(_externalOutputConnection);
+        disconnect(_externalFinishedConnection);
+        _busy = false;
+        if (_externalProgress)
+            _externalProgress->close();
+        QMessageBox::critical(
+            _parentWidget, tr("ScrollFiesta Spiral Hints"),
+            tr("Could not start the external ScrollFiesta job."));
+    }
 }
 
 void FiestaCommandHandler::onDetangleRois(

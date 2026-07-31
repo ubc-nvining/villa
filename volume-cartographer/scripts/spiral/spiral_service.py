@@ -46,7 +46,7 @@ import scipy.ndimage
 
 from fit_session import (API_VERSION, PclRole, parse_session_request,
                          resolve_dataset_root, validate_checkpoint_container,
-                         validate_session_request)
+                         validate_preview_config, validate_session_request)
 from config import Config
 
 
@@ -87,6 +87,7 @@ _PCL_ROLE_FILES = {
     PclRole.SAME_WINDING.value: "same_windings.json",
     PclRole.DRAWN_CONTROL_POINTS.value: "drawn_control_points.json",
 }
+_PATCH_ROLES = frozenset(("verified", "unverified"))
 
 # Base input paths are owned by the service when it was launched with
 # --dataset; a load request may then only choose among service-advertised
@@ -807,7 +808,21 @@ def _prepare_lasagna_surface_object(surface_dir, object_store):
     destination = (Path(object_store) / ref["type"] / manifest
                    / quote(ref["name"], safe=""))
     destination.mkdir(parents=True, exist_ok=True)
-    (destination / "segment").symlink_to(surface_dir, target_is_directory=True)
+    segment_link = destination / "segment"
+    try:
+        segment_link.symlink_to(surface_dir, target_is_directory=True)
+    except OSError as error:
+        # A normal Windows process does not have SeCreateSymbolicLinkPrivilege.
+        # The object store is temporary and previews are deliberately small, so
+        # a private copy is the safe portable fallback.  Preserve unexpected
+        # POSIX failures instead of hiding broken mounts or permissions.
+        if os.name != "nt":
+            raise
+        shutil.copytree(surface_dir, segment_link)
+        print(
+            f"SPIRAL_PREVIEW symlink unavailable ({error}); copied the "
+            "surface into the temporary Lasagna object store",
+            flush=True)
     (destination / "object.json").write_text(
         json.dumps(ref, indent=2) + "\n", encoding="utf-8")
     return ref
@@ -856,8 +871,12 @@ def _validate_tifxyz_output_step(metadata, expected_step):
 def _load_flatten_correspondence(checkpoint_path=None, map_path=None):
     """Read Lasagna's flattened-output -> Spiral-source grid map."""
     if map_path is not None and Path(map_path).is_file():
-        mapping = np.load(str(map_path), mmap_mode="r", allow_pickle=False)
-        mapping = np.asarray(mapping, dtype=np.float32)
+        # Load through an explicitly scoped stream. Returning a view of an
+        # np.memmap leaves the sidecar open for the lifetime of the array,
+        # which prevents preview cleanup/replacement on Windows.
+        with Path(map_path).open("rb") as stream:
+            mapping = np.asarray(
+                np.load(stream, allow_pickle=False), dtype=np.float32)
         if mapping.ndim != 3 or mapping.shape[-1] != 2:
             raise RuntimeError(
                 "Lasagna output-to-source map must have shape (rows, columns, 2)")
@@ -1322,7 +1341,7 @@ class ServiceState:
         if self.dataset_resolution is not None:
             request = self._dataset_session_request(request)
         paths, run, preview = parse_session_request(request)
-        errors = validate_session_request(paths, run)
+        errors = validate_session_request(paths, run) + validate_preview_config(preview)
         if errors:
             raise ApiError(HTTPStatus.BAD_REQUEST, "Session validation failed", errors)
         with self.lock:
@@ -1787,6 +1806,9 @@ class ServiceState:
                     f"Cannot find Lasagna flatten config: {config_path}")
             config = json.loads(config_path.read_text(encoding="utf-8"))
             manifest = json.loads(preview_manifest_path.read_text(encoding="utf-8"))
+            preview_config = (self.session_request or {}).get("preview") or {}
+            output_step_vx = float(preview_config.get(
+                "output_step_vx", LASAGNA_PREVIEW_OUTPUT_STEP_VX))
             surface_path = Path(str(manifest.get("surface_path") or ""))
             if not surface_path.is_dir():
                 raise RuntimeError(
@@ -1795,7 +1817,7 @@ class ServiceState:
             args = config.get("args")
             if not isinstance(args, dict):
                 args = {}
-            args["flatten_output_step"] = LASAGNA_PREVIEW_OUTPUT_STEP_VX
+            args["flatten_output_step"] = output_step_vx
             args["flatten_output_margin"] = 0.0
             config["args"] = args
             run_request = (self.session_request or {}).get("run") or {}
@@ -1826,7 +1848,7 @@ class ServiceState:
                 object_store = temporary / "objects"
                 start_stage(
                     "preparing", "Preparing Lasagna input surface",
-                    output_step_vx=LASAGNA_PREVIEW_OUTPUT_STEP_VX)
+                    output_step_vx=output_step_vx)
                 metadata = json.loads(
                     (surface_path / "meta.json").read_text(encoding="utf-8"))
                 cleanup = metadata.get("lasagna_input_cleanup")
@@ -1847,7 +1869,8 @@ class ServiceState:
 
                 process = subprocess.Popen(
                     [sys.executable, str(fit_service), "--port", "0",
-                     "--allow-no-data-dir", "--object-store-dir",
+                     "--allow-no-data-dir", "--no-gpu-pause",
+                     "--object-store-dir",
                      str(object_store)],
                     cwd=str(fit_service.parent),
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -2050,7 +2073,7 @@ class ServiceState:
                 flattened_metadata = json.loads(
                     flattened_metadata_path.read_text(encoding="utf-8"))
                 _validate_tifxyz_output_step(
-                    flattened_metadata, LASAGNA_PREVIEW_OUTPUT_STEP_VX)
+                    flattened_metadata, output_step_vx)
                 flattened_metadata.pop("components", None)
                 flattened_metadata.pop("winding_column_ranges", None)
                 flattened_metadata.pop("model_source", None)
@@ -2058,8 +2081,7 @@ class ServiceState:
                 flattened_metadata["name"] = surface_id
                 flattened_metadata["grid_shape"] = [
                     int(flattened_xyz.shape[0]), int(flattened_xyz.shape[1])]
-                flattened_metadata["output_step_vx"] = (
-                    LASAGNA_PREVIEW_OUTPUT_STEP_VX)
+                flattened_metadata["output_step_vx"] = output_step_vx
                 flattened_metadata["winding_id_map"] = winding_map_name
                 flattened_metadata["winding_id_dtype"] = "float32_integer"
                 flattened_metadata["winding_bounds"] = winding_bounds
@@ -2074,7 +2096,7 @@ class ServiceState:
                 published["surface_id"] = surface_id
                 published["surface_path"] = str(final_root / surface_id)
                 published["manifest_path"] = str(final_root / "manifest.json")
-                published["output_step_vx"] = LASAGNA_PREVIEW_OUTPUT_STEP_VX
+                published["output_step_vx"] = output_step_vx
                 published["grid_shape"] = [
                     int(flattened_xyz.shape[0]), int(flattened_xyz.shape[1])]
                 published["winding_ids"] = [
@@ -2207,7 +2229,13 @@ class ServiceState:
             raise ApiError(HTTPStatus.BAD_REQUEST,
                            "Input kind must be one of patch, fiber, pcl, checkpoint")
         role = request.get("role")
-        if kind == "pcl":
+        if kind == "patch":
+            role = str(role or "verified").strip()
+            if role not in _PATCH_ROLES:
+                raise ApiError(
+                    HTTPStatus.BAD_REQUEST,
+                    "A patch upload role must be verified or unverified")
+        elif kind == "pcl":
             if role not in _PCL_ROLE_FILES:
                 raise ApiError(HTTPStatus.BAD_REQUEST,
                                "A PCL upload must declare its role")
@@ -2490,14 +2518,21 @@ class ServiceState:
                            and not record.get("committed")]
                 paths = self.session_paths
             dataset_root = Path(paths.dataset_root)
-            patches_dir = Path(paths.verified_patches) if paths.verified_patches \
+            verified_patches_dir = Path(paths.verified_patches) if paths.verified_patches \
                 else dataset_root / "verified_patches"
+            unverified_patches_dir = Path(paths.unverified_patches) if paths.unverified_patches \
+                else dataset_root / "unverified_patches"
+            patch_directories = {
+                "verified": verified_patches_dir,
+                "unverified": unverified_patches_dir,
+            }
             fibers_dir = Path(paths.fibers) if paths.fibers else dataset_root / "fibers"
 
             # Collision checks and publications share the same dataset lock, so
             # cooperating service processes cannot race an existence check.
             for record in records:
-                if record["kind"] == "patch" and (patches_dir / record["id"]).exists():
+                if record["kind"] == "patch" and \
+                        (patch_directories[record["role"]] / record["id"]).exists():
                     raise ApiError(
                         HTTPStatus.CONFLICT,
                         f"A patch named {record['id']!r} already exists in the dataset")
@@ -2515,7 +2550,10 @@ class ServiceState:
                 # removes an input from the live session's queue.
                 keep_source = record["state"] == "pending"
                 if record["kind"] == "patch":
-                    _copy_publish(source, patches_dir / record["id"], keep_source)
+                    _copy_publish(
+                        source,
+                        patch_directories[record["role"]] / record["id"],
+                        keep_source)
                 elif record["kind"] == "fiber":
                     _copy_publish(source, fibers_dir / f"{record['id']}.json", keep_source)
                 else:
@@ -2966,8 +3004,8 @@ def main(argv=None):
         key, created = load_or_create_api_key(key_path)
         credentials.append(key)
         print(f"SPIRAL_SERVICE_KEY_FILE {key_path}", flush=True)
-        print(f"Spiral API key ({'generated' if created else 'reused'}; copy "
-              f"into VC3D): {key}", flush=True)
+        print(f"Spiral API key {'generated' if created else 'reused'}; "
+              "read it from SPIRAL_SERVICE_KEY_FILE", flush=True)
 
     dataset_resolution = None
     session_lease = None

@@ -71,7 +71,8 @@ public:
     void downloadCheckpoint(const QString& localPath);
     void deleteSession();
     void commitInputs();
-    void uploadPatch(const QString& directory, const QString& inputId);
+    void uploadPatch(const QString& directory, const QString& inputId,
+                     const QString& role = {});
     void uploadJsonInput(const QString& kind, const QString& filePath,
                          const QString& inputId, const QString& role = {});
     // Remove an added input that has not joined the resident fit yet.

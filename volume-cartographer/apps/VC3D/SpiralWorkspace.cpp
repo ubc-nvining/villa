@@ -711,13 +711,14 @@ bool SpiralWorkspace::hasActiveSpiralSession() const
 }
 
 void SpiralWorkspace::addPatchToCurrentFit(
-    const QString& tifxyzDirectory, const std::shared_ptr<QuadSurface>& surface)
+    const QString& tifxyzDirectory, const std::shared_ptr<QuadSurface>& surface,
+    const QString& role)
 {
     if (!_service) return;
     const QString inputId = QFileInfo(tifxyzDirectory).fileName();
     registerPendingPatchSurface(inputId, surface);
     statusBar()->showMessage(tr("Uploading patch %1 to the Spiral session…").arg(inputId));
-    _service->uploadPatch(tifxyzDirectory, inputId);
+    _service->uploadPatch(tifxyzDirectory, inputId, role);
 }
 
 void SpiralWorkspace::addFiberToCurrentFit(const QString& fiberJsonPath)

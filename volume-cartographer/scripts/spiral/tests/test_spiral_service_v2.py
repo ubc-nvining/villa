@@ -42,7 +42,8 @@ from spiral_service import (ApiError, ArtifactRegistry, ExclusiveFileLock,
                             _validate_tifxyz_output_step,
                             load_or_create_api_key, parse_gpu_ids,
                             parse_session_name)
-from fit_session import API_VERSION, SpiralInputPaths, resolve_dataset_root
+from fit_session import (API_VERSION, SpiralInputPaths, parse_session_request,
+                         resolve_dataset_root, validate_preview_config)
 from config import Config
 
 
@@ -216,8 +217,9 @@ class ApiKeyTests(unittest.TestCase):
             key, created = load_or_create_api_key(path)
             self.assertTrue(created)
             self.assertGreaterEqual(len(key), 32)
-            mode = stat.S_IMODE(path.stat().st_mode)
-            self.assertEqual(mode, stat.S_IRUSR | stat.S_IWUSR)
+            if os.name != "nt":
+                mode = stat.S_IMODE(path.stat().st_mode)
+                self.assertEqual(mode, stat.S_IRUSR | stat.S_IWUSR)
             again, created_again = load_or_create_api_key(path)
             self.assertFalse(created_again)
             self.assertEqual(key, again)
@@ -521,7 +523,12 @@ class ArtifactHttpTests(HttpServiceFixture):
         (artifact_root / "manifest.json").write_text("{}")
         secret = self.root / "outside.txt"
         secret.write_text("outside")
-        (artifact_root / "link.txt").symlink_to(secret)
+        try:
+            (artifact_root / "link.txt").symlink_to(secret)
+        except OSError as exc:
+            if os.name == "nt" and getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows account cannot create symbolic links")
+            raise
         ref = self.state.artifacts.register_directory(
             "spiral-preview", "session-1", 2, artifact_root, "manifest.json")
         status, payload, _ = self.request(
@@ -665,10 +672,37 @@ class DatasetOwnershipTests(unittest.TestCase):
         self.assertEqual(attached["run"]["scroll_name"], "attached-scroll")
         self.assertEqual(attached["run"]["config"], config)
         self.assertEqual(attached["preview"],
-                         {"first_winding": 12, "variant": "raw"})
+                         {"first_winding": 12, "last_winding": None,
+                          "output_step_vx": 20.0, "variant": "raw"})
 
         self.state.delete()
         self.assertIsNone(self.state.status()["session_request"])
+
+    def test_dense_preview_export_settings_are_parsed_and_validated(self):
+        _, _, preview = parse_session_request({
+            "preview": {
+                "first_winding": 4,
+                "last_winding": 8,
+                "output_step_vx": 1.0,
+                "variant": "raw",
+            },
+        })
+        self.assertEqual(preview.first_winding, 4)
+        self.assertEqual(preview.last_winding, 8)
+        self.assertEqual(preview.output_step_vx, 1.0)
+        self.assertEqual(validate_preview_config(preview), [])
+
+        _, _, invalid = parse_session_request({
+            "preview": {
+                "first_winding": 8,
+                "last_winding": 4,
+                "output_step_vx": 0.0,
+            },
+        })
+        fields = {error["field"] for error in validate_preview_config(invalid)}
+        self.assertEqual(fields, {
+            "preview.last_winding", "preview.output_step_vx",
+        })
 
     def test_failed_load_does_not_advertise_a_session_request(self):
         request = {
@@ -745,6 +779,7 @@ class UploadTests(unittest.TestCase):
         response = self.state.finalize_upload(upload_id)
         record = response["input"]
         self.assertEqual(record["state"], "pending")
+        self.assertEqual(record["role"], "verified")
         published = Path(record["path"])
         self.assertTrue((published / "meta.json").is_file())
         self.assertIn(".spiral-ephemeral", str(published))
@@ -755,6 +790,30 @@ class UploadTests(unittest.TestCase):
         # Finalize is idempotent.
         self.assertEqual(self.state.finalize_upload(upload_id)["input"]["id"],
                          "patch-1")
+
+    def test_patch_upload_preserves_unverified_role(self):
+        self._session()
+        upload_id = _upload_input(
+            self.state, "patch", "scroll-hint", PATCH_FILES,
+            role="unverified")
+        record = self.state.finalize_upload(upload_id)["input"]
+        self.assertEqual(record["role"], "unverified")
+        self.assertEqual(
+            self.state.status()["ephemeral_inputs"][0]["role"],
+            "unverified")
+
+        self.state.commit_inputs()
+        self.assertTrue(
+            (self.dataset / "unverified_patches" / "scroll-hint" / "meta.json").is_file())
+        self.assertFalse(
+            (self.dataset / "verified_patches" / "scroll-hint").exists())
+
+    def test_patch_upload_rejects_unknown_role(self):
+        self._session()
+        with self.assertRaisesRegex(ApiError, "verified or unverified"):
+            _upload_input(
+                self.state, "patch", "misclassified", PATCH_FILES,
+                role="trusted-ish")
 
     def test_finalize_rejects_missing_files_and_digest_mismatch(self):
         self._session()
@@ -1419,12 +1478,15 @@ class CommitTests(unittest.TestCase):
 
     def test_commit_on_read_only_dataset_is_reported_unavailable(self):
         self._finalize("patch", "patch-2", PATCH_FILES)
-        os.chmod(self.dataset, 0o555)
-        status = self.state.status()
-        self.assertFalse(status["commit_available"])
-        self.assertIn("read-only", status["commit_unavailable_reason"])
-        with self.assertRaisesRegex(ApiError, "read-only"):
-            self.state.commit_inputs()
+        # chmod does not remove directory write access on Windows. Mock the
+        # portability boundary so the availability contract is tested on
+        # every platform without relying on POSIX permission semantics.
+        with mock.patch("spiral_service.os.access", return_value=False):
+            status = self.state.status()
+            self.assertFalse(status["commit_available"])
+            self.assertIn("read-only", status["commit_unavailable_reason"])
+            with self.assertRaisesRegex(ApiError, "read-only"):
+                self.state.commit_inputs()
 
 
 class MappedPreviewArtifactTests(unittest.TestCase):

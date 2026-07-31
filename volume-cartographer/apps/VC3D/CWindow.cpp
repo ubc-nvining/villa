@@ -7316,16 +7316,55 @@ void CWindow::CreateWidgets(void)
             return (_state && _state->vpkg()) ? _state->vpkg()->getSurface(id)
                                               : nullptr;
         },
+        [this]() -> FiestaCommandHandler::HintContext {
+            FiestaCommandHandler::HintContext context;
+            if (!_state)
+                return context;
+            context.volumeId =
+                QString::fromStdString(_state->currentVolumeId());
+            context.volumeLocation = getCurrentVolumePath();
+            if (_state->currentVolume())
+                context.voxelSize = _state->currentVolume()->voxelSize();
+            if (_state->vpkg() && !_state->currentVolumeId().empty()) {
+                for (const auto& tag :
+                     _state->vpkg()->volumeTags(_state->currentVolumeId())) {
+                    context.volumeTags << QString::fromStdString(tag);
+                }
+            }
+            return context;
+        },
         this);
     connect(_fiestaCommandHandler.get(), &FiestaCommandHandler::statusMessage,
             this, [this](const QString& text, int timeout) {
                 statusBar()->showMessage(text, timeout);
             });
+    connect(
+        _fiestaCommandHandler.get(),
+        &FiestaCommandHandler::spiralHintsGenerated, this,
+        [this](const QStringList& ids, const QStringList& paths,
+               bool addToCurrentFit) {
+            if (!addToCurrentFit || !_spiralWorkspace ||
+                !_spiralWorkspace->hasActiveSpiralSession()) {
+                return;
+            }
+            for (int i = 0; i < ids.size() && i < paths.size(); ++i) {
+                std::shared_ptr<QuadSurface> surf;
+                if (_state && _state->vpkg())
+                    surf = _state->vpkg()->getSurface(ids[i].toStdString());
+                if (!surf)
+                    continue;
+                _spiralWorkspace->addPatchToCurrentFit(
+                    paths[i], surf, QStringLiteral("unverified"));
+            }
+        });
 #endif
     _segmentationCommandHandler->setCmdRunner(_cmdRunner);
     _segmentationCommandHandler->setSurfacePanel(_surfacePanel.get());
     _segmentationCommandHandler->setSegmentationGrower(_segmentationGrower.get());
     initializeCommandLineRunner();
+#ifdef VC_HAVE_SCROLLFIESTA
+    _fiestaCommandHandler->setCommandLineToolRunner(_cmdRunner);
+#endif
     _segmentationCommandHandler->setIsEditingCheck([this]() -> bool {
         return _segmentationModule && _segmentationModule->isEditingApprovalMask();
     });
@@ -8915,6 +8954,23 @@ void CWindow::updateOpenDataSegmentTransformState(bool showDialog)
             clearStatusBarMessage();
         }
     };
+
+    // A locally attached segment source is an explicit user choice.  Do not
+    // replace it with the catalog's matching open-data source merely because
+    // a package refresh or volume switch re-runs this policy.  Automatic
+    // source switching remains active when the selected source is itself an
+    // open-data entry.
+    const auto selectedSegmentsPath =
+        vpkg->outputSegmentsPath().lexically_normal();
+    if (!selectedSegmentsPath.empty()) {
+        const auto selectedEntry =
+            vpkg->matchingSegmentsEntry(selectedSegmentsPath.string());
+        if (selectedEntry && !isOpenDataSegmentsEntry(*selectedEntry)) {
+            setWarning(false);
+            _lastSegmentTransformWarningVolumeId.clear();
+            return;
+        }
+    }
 
     if (!hasOpenDataSegments || loadedVolumeId.empty()) {
         setWarning(false);

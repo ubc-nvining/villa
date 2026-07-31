@@ -102,6 +102,7 @@ from spiral_helpers import (
     _structurally_disabled_dense_weight_keys,
     resolve_outer_winding_idx_and_notes,
     patch_intersects_z_roi,
+    needs_trusted_geometry_index,
     save_combined_preview,
 )
 import sample_spiral
@@ -119,9 +120,11 @@ from spiral_progress import ProgressReporter, progress_or_null
 configure_torch_threads_from_env()
 
 
-# PHercParis4
-dataset_path = '/ephemeral/paul/spiral/dataset'
-scroll_zarr_path = None
+# PHercParis4. Every input path can be redirected without editing this file;
+# ScrollFiesta's adapter uses the patch/PCL overrides while an existing Villa
+# dataset continues to provide lasagna, tracks, shell, and umbilicus assets.
+dataset_path = os.environ.get('FIT_SPIRAL_DATASET_PATH', '/ephemeral/paul/spiral/dataset')
+scroll_zarr_path = os.environ.get('FIT_SPIRAL_SCROLL_ZARR_PATH') or None
 normal_nx_zarr_path = f'{dataset_path}/lasagna_inputs/las_008_nx.ome.zarr'
 normal_ny_zarr_path = f'{dataset_path}/lasagna_inputs/las_008_ny.ome.zarr'
 grad_mag_zarr_path = f'{dataset_path}/lasagna_inputs/las_008_grad_mag.ome.zarr'
@@ -131,7 +134,7 @@ normal_zarr_group = '4'
 # the store's own metadata, never from normal_zarr_group/lasagna_scale.
 surf_sdt_zarr_path = f'{dataset_path}/lasagna_inputs/las_008_surf_sdt.ome.zarr'
 surf_sdt_zarr_group = '1'
-pcl_json_paths = [
+pcl_json_paths = json.loads(os.environ['FIT_SPIRAL_PCL_JSON_PATHS']) if os.environ.get('FIT_SPIRAL_PCL_JSON_PATHS') else [
     f'{dataset_path}/abs_winding.json',
     f'{dataset_path}/patch-overlap-pcls.json',
     f'{dataset_path}/relative_windings.json',
@@ -141,16 +144,17 @@ pcl_json_paths = [
 # The interactive session API supplies explicit roles.  The legacy CLI leaves
 # this as None and retains the historical abs_winding.json basename behavior.
 pcl_input_specs = None
-fibers_path = f'{dataset_path}/fibers'
-verified_patches_path = f'{dataset_path}/verified_patches'
-unverified_patches_path = None
+fibers_path = os.environ.get('FIT_SPIRAL_FIBERS_PATH', f'{dataset_path}/fibers')
+verified_patches_path = os.environ.get('FIT_SPIRAL_VERIFIED_PATCHES_PATH', f'{dataset_path}/verified_patches')
+unverified_patches_path = os.environ.get('FIT_SPIRAL_UNVERIFIED_PATCHES_PATH', f'{dataset_path}/unverified_patches') or None
 run_tag = os.environ.get('FIT_SPIRAL_RUN_TAG')
-shell_path = f'{dataset_path}/outer_shell'
-tracks_dbm_path = f'{dataset_path}/tracks/2um_ds2_ps256_surf_v2.dbm'  # or: m7_ds2_z3000_18000_surf.dbm
+shell_path = os.environ.get('FIT_SPIRAL_SHELL_PATH', f'{dataset_path}/outer_shell') or None
+tracks_dbm_path = os.environ.get('FIT_SPIRAL_TRACKS_DBM_PATH', f'{dataset_path}/tracks/2um_ds2_ps256_surf_v2.dbm') or None  # or: m7_ds2_z3000_18000_surf.dbm
 spiral_outward_sense = 'CW'  # CW | ACW
 umbilicus_z_to_yx = lambda: json_umbilicus_z_to_yx(f'{dataset_path}/umbilicus.json', coordinate_scale=1.0)
 scroll_name = 's1'
-z_begin, z_end = 4000, 17000
+z_begin = int(os.environ.get('FIT_SPIRAL_Z_BEGIN', '4000'))
+z_end = int(os.environ.get('FIT_SPIRAL_Z_END', '17000'))
 voxel_size_um = 9.6
 cache_path = os.environ.get('FIT_SPIRAL_CACHE_DIR', '../cache')
 lasagna_scale = 4
@@ -1236,10 +1240,31 @@ def main(
     )
     trusted_geometry_tree = None
 
+    def _extend_trusted_geometry_tree(tree, patches):
+        """Return a trusted-geometry index that also contains new patches."""
+        new_points = []
+        for patch in patches:
+            zyx = patch.zyxs.reshape(-1, 3).detach().cpu()
+            valid = patch.valid_vertex_mask.reshape(-1).detach().cpu()
+            in_roi = (zyx[:, 0] >= z_begin) & (zyx[:, 0] < z_end)
+            if (valid & in_roi).any():
+                new_points.append(zyx[valid & in_roi].to(dtype=torch.float32))
+        if not new_points:
+            return tree
+        points = np.ascontiguousarray(
+            torch.cat(new_points, dim=0).numpy(), dtype=np.float32)
+        if tree is not None:
+            points = np.ascontiguousarray(
+                np.concatenate((np.asarray(tree.data, dtype=np.float32), points),
+                               axis=0),
+                dtype=np.float32)
+        return cKDTree(points)
+
     # Untrusted 'unverified' patches: mask away wherever they fall near trusted geometry (verified
     # patch vertices + pcl strips, same anchor cloud used for snap-anchors / track-exclusion), then
     # build their own sampling cache + GPU atlas. They feed only their own radius/DT losses.
-    if unverified_patches or using_tracks:
+    if needs_trusted_geometry_index(
+            unverified_patches, using_tracks, interactive_driver is not None):
         # Build a cKDTree over the scroll-space anchor points (CPU) for fixed-radius
         # nearest-neighbour queries.
         verified_patches_and_pcls_np = verified_patches_and_pcls_cpu.numpy()
@@ -1762,7 +1787,9 @@ def main(
             'torch_cpu_rng_state': torch.random.get_rng_state(),
             'torch_cuda_rng_states': torch.cuda.get_rng_state_all(),
             'input_manifest': dict(getattr(interactive_driver, 'input_manifest', {})),
-            'preview_first_winding': 10,
+            'preview_first_winding': int(getattr(
+                getattr(interactive_driver, 'preview_config', None),
+                'first_winding', cfg['output_first_winding'])),
         }
 
     def save_model_to(path, completed_iterations):
@@ -2016,6 +2043,12 @@ def main(
                 tracks=preview_extent_tracks,
                 surface_id=surface_id,
                 progress=progress,
+                first_winding=int(getattr(
+                    getattr(interactive_driver, 'preview_config', None),
+                    'first_winding', cfg['output_first_winding'])),
+                last_winding=getattr(
+                    getattr(interactive_driver, 'preview_config', None),
+                    'last_winding', None),
             )
             diagnostic_weights = {
                 name: cfg.get(f'loss_weight_{name}', 0.0)
@@ -2153,6 +2186,8 @@ def main(
         same items in the same order on every rank.
         """
         nonlocal patch_sampling_probabilities, next_id, influence_state
+        nonlocal unverified_patch_sampling_probabilities, unverified_patch_atlas
+        nonlocal trusted_geometry_tree
         nonlocal interactive_influence_loss_weight, interactive_influence_anchor_samples
         nonlocal interactive_dt_resume_iteration
         # Incorporation has its own saved RNG envelope so adding inputs does
@@ -2168,6 +2203,7 @@ def main(
             run_cfg = dict(cfg)
             run_cfg.update(dict(influence_config or {}))
             new_patches = {}
+            new_unverified_patches = {}
             new_collections = {}
             for record in records:
                 kind = record.get('kind')
@@ -2176,8 +2212,13 @@ def main(
                 if kind == 'patch':
                     if cfg['input_disable_patches']:
                         raise RuntimeError('disable_patches=True: this session takes no patches')
-                    if input_id in verified_patches or input_id in new_patches:
+                    if (input_id in verified_patches or input_id in unverified_patches
+                            or input_id in new_patches or input_id in new_unverified_patches):
                         raise RuntimeError(f'Patch {input_id!r} is already part of this session')
+                    role = record.get('role') or 'verified'
+                    if role not in ('verified', 'unverified'):
+                        raise RuntimeError(
+                            f'Patch {input_id!r} has unknown input role {role!r}')
                     patch = load_tifxyz(path)
                     cells_to_erode = patch.erosion_cells(cfg['patch_erode_patches'])
                     if cells_to_erode > 0 and not erode_patch_valid_region(patch, cells_to_erode):
@@ -2187,7 +2228,8 @@ def main(
                             f'Patch {input_id!r} does not intersect the fitted z range '
                             f'[{z_begin}, {z_end})')
                     patch.release_derived_caches()
-                    new_patches[input_id] = patch
+                    target = new_unverified_patches if role == 'unverified' else new_patches
+                    target[input_id] = patch
                 elif kind == 'fiber':
                     pcl = load_fiber_point_collection(
                         path, next_id, min_point_spacing=cfg['pcl_fiber_min_point_spacing'])
@@ -2233,11 +2275,53 @@ def main(
                 inv_weights = areas ** 0.5
                 patch_sampling_probabilities = inv_weights / inv_weights.sum()
                 patch_atlas.append_patches(new_patches)
+                # Future low-trust inputs (including another hint in this same
+                # batch) must be masked against patches incorporated after the
+                # resident session's initial trusted index was built.
+                trusted_geometry_tree = _extend_trusted_geometry_tree(
+                    trusted_geometry_tree, new_patches.values())
                 if cfg['dt_target_mode'] == 'whole_object_quantile':
                     prepare_patch_dt_target_samples(
                         list(new_patches.values()),
                         cfg['sample_count_patch_dt_target_points'], cfg['dt_target_max_stride'],
                     )
+
+            if new_unverified_patches:
+                exclusion_radius = float(
+                    cfg['patch_unverified_patch_exclusion_radius'])
+                new_unverified_patches, n_masked_vertices, n_dropped_patches = (
+                    _mask_unverified_patches_near_trusted_geometry(
+                        new_unverified_patches,
+                        trusted_geometry_tree,
+                        exclusion_radius,
+                    )
+                )
+                print(
+                    f'interactive unverified patches: masked {n_masked_vertices} vertices '
+                    f'near trusted geometry (radius {exclusion_radius:.1f}), dropped '
+                    f'{n_dropped_patches} fully-masked patches; '
+                    f'{len(new_unverified_patches)} remain'
+                )
+                if new_unverified_patches:
+                    prepare_patch_sampling_cache(list(new_unverified_patches.values()))
+                    unverified_patches.update(new_unverified_patches)
+                    unverified_patches_list.extend(new_unverified_patches.values())
+                    areas = np.array(
+                        [float(p.area) for p in unverified_patches_list],
+                        dtype=np.float32)
+                    inv_weights = areas ** 0.5
+                    unverified_patch_sampling_probabilities = inv_weights / inv_weights.sum()
+                    if unverified_patch_atlas is None:
+                        unverified_patch_atlas = PatchGpuAtlas(
+                            new_unverified_patches, device='cuda')
+                    else:
+                        unverified_patch_atlas.append_patches(new_unverified_patches)
+                    if cfg['dt_target_mode'] == 'whole_object_quantile':
+                        prepare_patch_dt_target_samples(
+                            list(new_unverified_patches.values()),
+                            cfg['sample_count_patch_dt_target_points'],
+                            cfg['dt_target_max_stride'],
+                        )
 
             # ---- Point collections: link, classify, strip-materialise ----
             if new_collections:
@@ -2343,15 +2427,18 @@ def main(
                 # Sampling strata index into the (now longer) pools.
                 rebuild_pcl_sampling_strata()
 
-            if new_patches or new_collections:
+            if new_patches or new_unverified_patches or new_collections:
                 # Whole-object DT target caches index the (now longer) object
                 # pools; force recomputation on next use.
                 dt_target_cache_manager.reset()
 
-            if run_cfg['influence_enabled'] and (new_patches or new_collections):
+            if run_cfg['influence_enabled'] and (
+                    new_patches or new_unverified_patches or new_collections):
+                influence_patches = dict(new_patches)
+                influence_patches.update(new_unverified_patches)
                 influence_state = make_influence_state(run_cfg, torch.device('cuda'))
                 influence_state.activate_or_extend_(
-                    new_patches=new_patches,
+                    new_patches=influence_patches,
                     new_collections=new_collections,
                     spiral_and_transform=spiral_and_transform,
                     optimiser=optimiser,
@@ -2376,7 +2463,8 @@ def main(
             )
             interactive_dt_resume_iteration = dt_resume_iteration
 
-            print(f'incorporated {len(new_patches)} patches and '
+            print(f'incorporated {len(new_patches)} verified patches, '
+                  f'{len(new_unverified_patches)} unverified patches, and '
                   f'{len(new_collections)} point collections into the resident session; '
                   f'DT losses disabled until iteration {interactive_dt_resume_iteration}')
         finally:
@@ -3148,7 +3236,18 @@ if __name__ == '__main__':
         wandb.init(project='scrolls', config=config, mode=wandb_mode)
         cfg = wandb.config
         configure_losses(cfg, z_begin, z_end)
-        main(progress=cli_progress)
+        load_only = os.environ.get('FIT_SPIRAL_LOAD_ONLY', '').lower() in {'1', 'true', 'yes'}
+        loaded = main(
+            load_only_patches_and_point_collections=load_only,
+            progress=cli_progress,
+        )
+        if load_only and is_main_process():
+            verified, unverified, _shell, cross_patch, unattached = loaded
+            print(
+                f'FIT_SPIRAL_LOAD_ONLY OK: verified={len(verified)} '
+                f'unverified={len(unverified)} cross_patch_pcls={len(cross_patch)} '
+                f'unattached_pcls={len(unattached)}'
+            )
     finally:
         if cli_progress is not None:
             cli_progress.close()

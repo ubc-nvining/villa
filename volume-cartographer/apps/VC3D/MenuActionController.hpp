@@ -115,7 +115,7 @@ private slots:
     void toggleDrawBBox(bool enabled);
     void toggleCursorMirroring(bool enabled);
     void surfaceFromSelection();
-    void fiestaCleanSelection();
+    void fiestaGenerateSpiralHints();
     void fiestaDetangleSelection();
     void clearSelection();
     void importObjAsPatch();
@@ -215,7 +215,7 @@ private:
                                     std::vector<cv::Rect>& rois);
 
     QAction* _surfaceFromSelectionAct{nullptr};
-    QAction* _fiestaCleanSelectionAct{nullptr};
+    QAction* _fiestaGenerateHintsAct{nullptr};
     QAction* _fiestaDetangleSelectionAct{nullptr};
     QAction* _selectionClearAct{nullptr};
     QAction* _importObjAct{nullptr};

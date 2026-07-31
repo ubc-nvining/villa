@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <cmath>
+#include <opencv2/imgcodecs.hpp>
 
 
 
@@ -33,6 +34,9 @@ private:
     cv::Vec2i grid_size;
     cv::Vec2d full_resolution;  // Full voxel resolution before downsampling
     float step_size;
+    cv::Mat1b valid_mask;
+    int contested_cells = 0;
+    static constexpr float contested_tolerance_vox = 1.5f;
 
 public:
     bool loadObj(const std::string& filename) {
@@ -200,17 +204,19 @@ public:
     QuadSurface* createQuadSurface() {
         // Create points matrix initialized with invalid values
         cv::Mat_<cv::Vec3f>* points = new cv::Mat_<cv::Vec3f>(grid_size[1], grid_size[0], cv::Vec3f(-1, -1, -1));
+        cv::Mat1b state(grid_size[1], grid_size[0], uint8_t{0});
+        contested_cells = 0;
 
         // Rasterize triangles onto the grid
         for (const auto& face : faces) {
-            rasterizeTriangle(*points, face);
+            rasterizeTriangle(*points, state, face);
         }
 
         // Count valid points
         int valid_count = 0;
         for (int y = 0; y < grid_size[1]; y++) {
             for (int x = 0; x < grid_size[0]; x++) {
-                if ((*points)(y, x)[0] != -1) {
+                if (state(y, x) == 1) {
                     valid_count++;
                 }
             }
@@ -218,6 +224,11 @@ public:
 
         std::cout << "Valid grid points: " << valid_count << " / " << (grid_size[0] * grid_size[1])
                   << " (" << (100.0f * valid_count / (grid_size[0] * grid_size[1])) << "%)" << std::endl;
+        std::cout << "Contested grid points invalidated: " << contested_cells
+                  << " (3D disagreement > " << contested_tolerance_vox << " vox)" << std::endl;
+
+        valid_mask = cv::Mat1b(grid_size[1], grid_size[0], uint8_t{0});
+        valid_mask.setTo(uint8_t{255}, state == 1);
 
         // Scale = 1/step_size (matching GrowPatch.cpp pattern)
         cv::Vec2f scale = {1.0f / step_size, 1.0f / step_size};
@@ -225,9 +236,27 @@ public:
         return new QuadSurface(points, scale);
     }
 
+    bool saveMaskAndAudit(const std::filesystem::path& output_dir) const {
+        const std::vector<int> tiff_params = {
+            cv::IMWRITE_TIFF_COMPRESSION, 1  // COMPRESSION_NONE; portable to tifffile without imagecodecs
+        };
+        if (valid_mask.empty() || !cv::imwrite(
+                (output_dir / "mask.tif").string(), valid_mask, tiff_params)) {
+            return false;
+        }
+        std::ofstream audit(output_dir / "rasterization.json");
+        if (!audit) return false;
+        audit << "{\n"
+              << "  \"contested_tolerance_vox\": " << contested_tolerance_vox << ",\n"
+              << "  \"invalid_contested_cells\": " << contested_cells << "\n"
+              << "}\n";
+        return static_cast<bool>(audit);
+    }
+
 
 private:
-    void rasterizeTriangle(cv::Mat_<cv::Vec3f>& points, const Face& face) {
+    void rasterizeTriangle(cv::Mat_<cv::Vec3f>& points, cv::Mat1b& state,
+                           const Face& face) {
         // Get triangle vertices and UVs
         cv::Vec3f v0 = vertices[face.v[0]].pos;
         cv::Vec3f v1 = vertices[face.v[1]].pos;
@@ -274,9 +303,19 @@ private:
                     // Interpolate 3D position
                     cv::Vec3f pos = bary[0] * v0 + bary[1] * v1 + bary[2] * v2;
                     
-                    // Only update if not already set (first triangle wins)
-                    if (points(y, x)[0] == -1) {
+                    if (state(y, x) == 0) {
                         points(y, x) = pos;
+                        state(y, x) = 1;
+                    } else if (state(y, x) == 1) {
+                        cv::Vec3f delta = points(y, x) - pos;
+                        if (delta.dot(delta) > contested_tolerance_vox * contested_tolerance_vox) {
+                            // Two geometrically distinct sheets landed on one
+                            // UV cell. Exposing either one manufactures a false
+                            // bridge for downstream patch linking, so hide both.
+                            points(y, x) = cv::Vec3f(-1, -1, -1);
+                            state(y, x) = 2;
+                            contested_cells++;
+                        }
                     }
                 }
             }
@@ -367,6 +406,9 @@ int main(int argc, char *argv[])
     
     try {
         surf->save(output_dir.string(), uuid);
+        if (!converter.saveMaskAndAudit(output_dir)) {
+            throw std::runtime_error("failed to write contested-safe mask.tif");
+        }
         std::cout << "Successfully converted to tifxyz format" << std::endl;
     }
     catch (const std::exception& e) {

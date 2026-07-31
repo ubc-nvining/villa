@@ -202,10 +202,12 @@ int main()
             QString(),
             AgentBridgeParams::optionalNumber(QString())));
     expectNoThrow("nested-array<-valid", [&] {
-        nestedArray.validate(QJsonArray{QJsonArray{1.0, 2.0}});
+        nestedArray.validate(
+            QJsonArray{QJsonValue(QJsonArray{1.0, 2.0})});
     });
     expectParamError("nested-array<-invalid-item", "points", [&] {
-        nestedArray.validate(QJsonArray{QJsonArray{1.0, "two"}});
+        nestedArray.validate(
+            QJsonArray{QJsonValue(QJsonArray{1.0, "two"})});
     });
     AgentBridgeParam stringOrInteger{
         .name = QStringLiteral("id"),

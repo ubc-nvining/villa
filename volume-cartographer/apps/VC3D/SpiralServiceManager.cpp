@@ -907,7 +907,8 @@ void SpiralServiceManager::removeEphemeralInput(const QString& kind, const QStri
     });
 }
 
-void SpiralServiceManager::uploadPatch(const QString& directory, const QString& inputId)
+void SpiralServiceManager::uploadPatch(
+    const QString& directory, const QString& inputId, const QString& role)
 {
     if (!isReady()) { emit inputUploadFinished(inputId, tr("Spiral service is not connected")); return; }
     const quint64 generation = _connectionGeneration;
@@ -933,7 +934,7 @@ void SpiralServiceManager::uploadPatch(const QString& directory, const QString& 
                          emit inputUploadFinished(inputId, error);
                      });
             });
-    watcher->setFuture(QtConcurrent::run([directory, inputId]() -> QJsonObject {
+    watcher->setFuture(QtConcurrent::run([directory, inputId, role]() -> QJsonObject {
         QJsonArray files;
         QDirIterator it(directory, QDir::Files, QDirIterator::Subdirectories);
         const QDir base(directory);
@@ -952,9 +953,14 @@ void SpiralServiceManager::uploadPatch(const QString& directory, const QString& 
         }
         if (files.isEmpty())
             return {{QStringLiteral("error"), tr("The patch directory %1 is empty").arg(directory)}};
-        return {{QStringLiteral("kind"), QStringLiteral("patch")},
-                {QStringLiteral("id"), inputId},
-                {QStringLiteral("files"), files}};
+        QJsonObject begin{
+            {QStringLiteral("kind"), QStringLiteral("patch")},
+            {QStringLiteral("id"), inputId},
+            {QStringLiteral("files"), files},
+        };
+        if (!role.isEmpty())
+            begin.insert(QStringLiteral("role"), role);
+        return begin;
     }));
 }
 

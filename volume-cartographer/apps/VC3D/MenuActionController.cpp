@@ -176,8 +176,12 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
     _surfaceFromSelectionAct = new QAction(QObject::tr("Surface from Selection"), this);
     connect(_surfaceFromSelectionAct, &QAction::triggered, this, &MenuActionController::surfaceFromSelection);
 #ifdef VC_HAVE_SCROLLFIESTA
-    _fiestaCleanSelectionAct = new QAction(QObject::tr("ScrollFiesta: Clean Selection"), this);
-    connect(_fiestaCleanSelectionAct, &QAction::triggered, this, &MenuActionController::fiestaCleanSelection);
+    _fiestaGenerateHintsAct =
+        new QAction(QObject::tr("ScrollFiesta: Generate Spiral Hints"), this);
+    _fiestaGenerateHintsAct->setToolTip(QObject::tr(
+        "Generate new, unverified spiral-fit hint segments from the selected regions"));
+    connect(_fiestaGenerateHintsAct, &QAction::triggered, this,
+            &MenuActionController::fiestaGenerateSpiralHints);
 #ifdef VC_FIESTA_DETANGLE_UI
     // Experimental + destructive on whole segments — OFF unless enabled.
     _fiestaDetangleSelectionAct = new QAction(QObject::tr("ScrollFiesta: Detangle Selection (experimental)"), this);
@@ -254,7 +258,7 @@ void MenuActionController::populateMenus(QMenuBar* menuBar)
     _selectionMenu = new QMenu(QObject::tr("&Selection"), qWindow);
     _selectionMenu->addAction(_surfaceFromSelectionAct);
 #ifdef VC_HAVE_SCROLLFIESTA
-    _selectionMenu->addAction(_fiestaCleanSelectionAct);
+    _selectionMenu->addAction(_fiestaGenerateHintsAct);
 #ifdef VC_FIESTA_DETANGLE_UI
     _selectionMenu->addAction(_fiestaDetangleSelectionAct);
 #endif
@@ -1431,7 +1435,7 @@ bool MenuActionController::collectFiestaSelectionRois(std::string& segmentId,
 #endif
 }
 
-void MenuActionController::fiestaCleanSelection()
+void MenuActionController::fiestaGenerateSpiralHints()
 {
 #ifdef VC_HAVE_SCROLLFIESTA
     std::string segmentId;
@@ -1439,7 +1443,8 @@ void MenuActionController::fiestaCleanSelection()
     if (!collectFiestaSelectionRois(segmentId, rois)) {
         return;
     }
-    _window->_fiestaCommandHandler->onCleanRois(segmentId, std::move(rois));
+    _window->_fiestaCommandHandler->onGenerateSpiralHints(
+        segmentId, std::move(rois));
 #endif
 }
 

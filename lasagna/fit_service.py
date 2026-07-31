@@ -1902,10 +1902,15 @@ def _run_optimization(job: _JobState, body: dict[str, Any]) -> None:
             return _orig_optimize(**kwargs)
 
         from contextlib import nullcontext
-        from gpu_pause import gpu_pause_context
+
+        if _gpu_pause_enabled:
+            from gpu_pause import gpu_pause_context
+            pause_context = gpu_pause_context()
+        else:
+            pause_context = nullcontext()
 
         opt_mod.optimize = _patched_optimize
-        with (gpu_pause_context() if _gpu_pause_enabled else nullcontext()):
+        with pause_context:
             try:
                 import fit as fit_mod
                 job.set_running("loading", 0, 0, 0.0)
@@ -2349,8 +2354,12 @@ class _Handler(BaseHTTPRequestHandler):
 
             import lasagna_analyze
             from contextlib import nullcontext
-            from gpu_pause import gpu_pause_context
-            with (gpu_pause_context() if _gpu_pause_enabled else nullcontext()):
+            if _gpu_pause_enabled:
+                from gpu_pause import gpu_pause_context
+                pause_context = gpu_pause_context()
+            else:
+                pause_context = nullcontext()
+            with pause_context:
                 lasagna_analyze.export_vis_obj(
                     model_path=str(model_input),
                     data_path=str(data_input),

@@ -40,14 +40,18 @@ environment variable (full path) → the platform's default library search.
   segments; a clean single sheet self-gates to one piece.
 
 **Subregions** — enable *Edit → Draw BBox*, drag one or more selections on
-the segmentation viewer, then **Selection → ScrollFiesta: Clean Selection /
-Detangle Selection**. The operation runs on exactly those grid regions; all
-selections are processed in one job with per-selection progress.
+the segmentation viewer, then **Selection → ScrollFiesta: Generate Spiral
+Hints**. Supply the scroll axis and expected wrap spacing in the dialog. Each
+selected grid region becomes a new `scroll-hint` / `unverified` tifxyz patch;
+the source segment is never modified. When a Spiral session is active, the
+dialog can upload the generated patches directly as low-trust inputs.
 
 Everything runs on a worker thread with a determinate progress dialog and a
 working **Cancel** (the original is never touched by a cancelled run).
-Segments written by ScrollFiesta carry `fiesta-clean` / `fiesta-split` tags
-and a `meta["fiesta"]` provenance block (`op`, `parent`, `roi`, `piece`).
+Segments written by ScrollFiesta carry `fiesta-clean`, `fiesta-split`, or
+`scroll-hint` tags and a `meta["fiesta"]` provenance block. Spiral hints also
+record their ROI, source volume, scroll geometry, and explicit `unverified`
+trust state.
 
 ## CLI tools
 
@@ -68,6 +72,43 @@ non-manifold/genus/timings; with `--detangle`, piece counts per stage and
 write-back warnings). This is the harness for evaluating the ops on real
 data; the stage toggles let you A/B a single splitter. Segments above
 `--max-cells` (default 6M) are skipped.
+
+```
+vc_fiesta hints <tifxyz_dir> <out_root> --roi=X,Y,W,H [--roi=...]
+                --json=<manifest.json> --axis-point-zyx=Z,Y,X
+                --axis-direction-zyx=Z,Y,X --wrap-spacing=N
+                [--volume-id=ID] [--volume-location=PATH]
+                [--voxel-size=N] [--volume-tag=TAG] [--progress]
+                [--cancel-file=FILE]
+```
+Generates one new unverified hint per ROI and writes a
+`vc3d-scrollfiesta-hints-v1` import manifest. Output directories use
+`QuadSurface`'s atomic save, existing paths are never overwritten, and any
+outputs already created by a failed or cancelled multi-ROI run are rolled
+back. Creating `--cancel-file` requests cooperative cancellation (exit 3).
+
+### Feeding a file-based hint dataset to Spiral
+
+`scripts/spiral/scrollfiesta_dataset.py` validates an exchange directory and
+passes its verified and unverified patch roles to `fit_spiral.py` without a
+Python/C++ ABI dependency. The directory must contain
+`villa_dataset.json` with format `scrollfiesta-villa-dataset-v1`, paths named
+by `verified_patches` and `unverified_patches`, and any point-collection files
+listed by `point_collections`. A tifxyz patch may use either `-1` coordinate
+sentinels or an explicit `mask.tif`; the mask is optional.
+
+```
+python scripts/spiral/scrollfiesta_dataset.py <exchange_dir>
+python scripts/spiral/scrollfiesta_dataset.py <exchange_dir> \
+  --base-dataset <villa_dataset> --load-only
+python scripts/spiral/scrollfiesta_dataset.py <exchange_dir> \
+  --connect-overlaps
+```
+
+The first command is validation-only. `--load-only` exercises patch/PCL
+loading and linkage without starting optimization; omit it and use `--fit` to
+run the fitter. Add `--dry-run` to inspect the exact command and
+`FIT_SPIRAL_*` environment without launching it.
 
 ```
 vc_opendata list                    [--json] [--manifest=<url|file>]
@@ -162,7 +203,7 @@ Two routes, both in `vc_core`/`vc_flattening` (no ScrollFiesta dependency):
 ## Building
 
 `VC_WITH_SCROLLFIESTA` (default ON) makes `cmake/FetchScrollFiesta.cmake`
-fetch the pinned tag, build `scrollfiesta.dll`/`.so`, and stage it next to
+fetch the pinned public revision, build `scrollfiesta.dll`/`.so`, and stage it next to
 the executables in `build/bin`; `cmake --install … --component vc_runtime`
 ships it alongside VC3D. With the option OFF there is no network access, no
 ScrollFiesta target, and the GUI entries are compiled out

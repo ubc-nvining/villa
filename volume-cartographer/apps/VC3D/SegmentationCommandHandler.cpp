@@ -2429,8 +2429,11 @@ bool SegmentationCommandHandler::startRenderSegment(const std::string& segmentId
     }
 
     // Return missing-tool errors before execute() reaches its dialog path.
-    const QString toolPath =
+    QString toolPath =
         QCoreApplication::applicationDirPath() + QStringLiteral("/vc_render_tifxyz");
+#ifdef Q_OS_WIN
+    toolPath += QStringLiteral(".exe");
+#endif
     QFileInfo toolInfo(toolPath);
     if (!toolInfo.exists() || !toolInfo.isExecutable()) {
         setErr(tr("vc_render_tifxyz not found or not executable: %1").arg(toolPath),

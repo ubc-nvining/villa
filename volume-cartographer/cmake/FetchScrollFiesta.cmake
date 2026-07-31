@@ -15,8 +15,11 @@
 
 include(FetchContent)
 
-set(VC_SCROLLFIESTA_TAG "v0.9.0" CACHE STRING
-    "scrollfiesta_public git tag to fetch")
+# v0.9.0 exists only as a local tag in the development checkout and is not
+# fetchable from GitHub. Pin the current public main commit instead of a moving
+# branch so clean builds are both reproducible and network-resolvable.
+set(VC_SCROLLFIESTA_TAG "4f43cfc242d2d7f90147ceb5a38790fb36517dcd" CACHE STRING
+    "scrollfiesta_public git revision to fetch")
 
 # Library-only embed: no CLI tools, no TIFF, no tests, no install rules.
 set(SCROLLFIESTA_BUILD_TOOLS OFF)
@@ -32,7 +35,13 @@ set(BUILD_SHARED_LIBS ON)
 FetchContent_Declare(scrollfiesta
     GIT_REPOSITORY https://github.com/Hob3rMallow/scrollfiesta_public.git
     GIT_TAG        ${VC_SCROLLFIESTA_TAG}
-    GIT_SHALLOW    TRUE)
+    # The public repository also carries large result meshes through Git LFS.
+    # None are inputs to the embedded library; leave their pointer files in
+    # place so a clean VC build does not download unrelated dataset artifacts.
+    GIT_CONFIG
+        "filter.lfs.smudge="
+        "filter.lfs.process="
+        "filter.lfs.required=false")
 FetchContent_MakeAvailable(scrollfiesta)
 set(BUILD_SHARED_LIBS ${_vc_saved_build_shared})
 

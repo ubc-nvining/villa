@@ -6,9 +6,13 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QHBoxLayout>
+#include <QMessageBox>
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 // ─────────────────────────────── clean ─────────────────────────────────────
 
@@ -18,12 +22,19 @@ bool FiestaCleanDialog::s_pinholes = true;
 bool FiestaCleanDialog::s_sliver = false;
 double FiestaCleanDialog::s_cullFrac = 0.0;
 bool FiestaCleanDialog::s_overwrite = false;
+bool FiestaCleanDialog::s_haveHintGeometry = false;
+std::array<double, 3> FiestaCleanDialog::s_axisPoint{0.0, 0.0, 0.0};
+std::array<double, 3> FiestaCleanDialog::s_axisDirection{1.0, 0.0, 0.0};
+double FiestaCleanDialog::s_wrapSpacing = 9.5;
+bool FiestaCleanDialog::s_addToFit = true;
 
 FiestaCleanDialog::FiestaCleanDialog(
-    QWidget* parent, const sf_api* api, bool allowInPlace)
+    QWidget* parent, const sf_api* api, bool allowInPlace,
+    std::array<double, 3> suggestedAxisPointZyx)
     : QDialog(parent)
 {
-    setWindowTitle(tr("ScrollFiesta Clean"));
+    setWindowTitle(allowInPlace ? tr("ScrollFiesta Clean")
+                                : tr("ScrollFiesta Spiral Hints"));
     _defaults = api->cleanup_config_default();
 
     const bool manifold =
@@ -36,6 +47,54 @@ FiestaCleanDialog::FiestaCleanDialog(
         s_haveSession ? s_cullFrac : static_cast<double>(_defaults.cull_min_area_frac);
 
     auto* layout = new QVBoxLayout(this);
+
+    if (!allowInPlace) {
+        auto* hint = new QLabel(
+            tr("Generate new, unverified surface patches for the scroll "
+               "diffeomorphism. The source segment is never modified."),
+            this);
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+
+        auto* geometry = new QGroupBox(
+            tr("Scroll geometry (volume coordinates)"), this);
+        auto* geometryForm = new QFormLayout(geometry);
+        auto makeTriple = [geometry](
+                              std::array<QDoubleSpinBox*, 3>& fields,
+                              const std::array<double, 3>& values,
+                              double minimum, double maximum, int decimals) {
+            auto* row = new QWidget(geometry);
+            auto* rowLayout = new QHBoxLayout(row);
+            rowLayout->setContentsMargins(0, 0, 0, 0);
+            const char* names[] = {"Z", "Y", "X"};
+            for (size_t i = 0; i < fields.size(); ++i) {
+                rowLayout->addWidget(new QLabel(QString::fromLatin1(names[i]), row));
+                fields[i] = new QDoubleSpinBox(row);
+                fields[i]->setRange(minimum, maximum);
+                fields[i]->setDecimals(decimals);
+                fields[i]->setValue(values[i]);
+                rowLayout->addWidget(fields[i]);
+            }
+            return row;
+        };
+        const auto axisPoint =
+            s_haveHintGeometry ? s_axisPoint : suggestedAxisPointZyx;
+        geometryForm->addRow(
+            tr("Axis point (Z,Y,X):"),
+            makeTriple(_spAxisPoint, axisPoint, -1000000.0, 1000000.0, 3));
+        geometryForm->addRow(
+            tr("Axis direction (Z,Y,X):"),
+            makeTriple(
+                _spAxisDirection, s_axisDirection, -1.0, 1.0, 6));
+        _spWrapSpacing = new QDoubleSpinBox(geometry);
+        _spWrapSpacing->setRange(0.001, 100000.0);
+        _spWrapSpacing->setDecimals(4);
+        _spWrapSpacing->setValue(s_wrapSpacing);
+        _spWrapSpacing->setToolTip(
+            tr("Expected center-to-center spacing between adjacent wraps, in voxels."));
+        geometryForm->addRow(tr("Wrap spacing (voxels):"), _spWrapSpacing);
+        layout->addWidget(geometry);
+    }
 
     auto* stages = new QGroupBox(tr("Stages"), this);
     auto* form = new QFormLayout(stages);
@@ -71,6 +130,17 @@ FiestaCleanDialog::FiestaCleanDialog(
     else
         _rbNewSegment->setChecked(true);
     _rbOverwrite->setEnabled(allowInPlace);
+    if (!allowInPlace) {
+        _rbNewSegment->setText(
+            tr("Save as an unverified spiral hint (source untouched)"));
+        _rbOverwrite->hide();
+        _cbAddToFit = new QCheckBox(
+            tr("Add generated hints to the current Spiral fit"), resultBox);
+        _cbAddToFit->setChecked(s_addToFit);
+        _cbAddToFit->setToolTip(
+            tr("When a Spiral session is active, upload these patches as ephemeral, low-trust fit inputs."));
+        resultLayout->addWidget(_cbAddToFit);
+    }
     layout->addWidget(resultBox);
 
     auto* buttons = new QDialogButtonBox(
@@ -96,14 +166,64 @@ bool FiestaCleanDialog::overwriteOriginal() const
     return _rbOverwrite->isChecked() && _rbOverwrite->isEnabled();
 }
 
+QString FiestaCleanDialog::axisPointZyx() const
+{
+    if (!_spAxisPoint[0])
+        return {};
+    return QStringLiteral("%1,%2,%3")
+        .arg(_spAxisPoint[0]->value(), 0, 'g', 17)
+        .arg(_spAxisPoint[1]->value(), 0, 'g', 17)
+        .arg(_spAxisPoint[2]->value(), 0, 'g', 17);
+}
+
+QString FiestaCleanDialog::axisDirectionZyx() const
+{
+    if (!_spAxisDirection[0])
+        return {};
+    return QStringLiteral("%1,%2,%3")
+        .arg(_spAxisDirection[0]->value(), 0, 'g', 17)
+        .arg(_spAxisDirection[1]->value(), 0, 'g', 17)
+        .arg(_spAxisDirection[2]->value(), 0, 'g', 17);
+}
+
+double FiestaCleanDialog::wrapSpacing() const
+{
+    return _spWrapSpacing ? _spWrapSpacing->value() : 0.0;
+}
+
+bool FiestaCleanDialog::addToCurrentFit() const
+{
+    return _cbAddToFit && _cbAddToFit->isChecked();
+}
+
 void FiestaCleanDialog::accept()
 {
+    if (_spAxisDirection[0]) {
+        const double length = std::hypot(
+            _spAxisDirection[0]->value(), _spAxisDirection[1]->value(),
+            _spAxisDirection[2]->value());
+        if (length <= 0.0) {
+            QMessageBox::warning(
+                this, tr("ScrollFiesta Spiral Hints"),
+                tr("Axis direction must be non-zero."));
+            return;
+        }
+    }
     s_haveSession = true;
     s_manifold = _cbManifold->isChecked();
     s_pinholes = _cbPinholes->isChecked();
     s_sliver = _cbSliver->isChecked();
     s_cullFrac = _spCull->value();
     s_overwrite = overwriteOriginal();
+    if (_spAxisPoint[0]) {
+        for (size_t i = 0; i < 3; ++i) {
+            s_axisPoint[i] = _spAxisPoint[i]->value();
+            s_axisDirection[i] = _spAxisDirection[i]->value();
+        }
+        s_wrapSpacing = _spWrapSpacing->value();
+        s_addToFit = _cbAddToFit->isChecked();
+        s_haveHintGeometry = true;
+    }
     QDialog::accept();
 }
 

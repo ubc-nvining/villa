@@ -11,6 +11,7 @@ from spiral_helpers import (
     _resolve_shell_outer_winding_idx,
     _structurally_disabled_dense_weight_keys,
     load_fiber_point_collection,
+    needs_trusted_geometry_index,
     resolve_outer_winding_idx_and_notes,
 )
 from tifxyz import load_tifxyz
@@ -74,6 +75,18 @@ class TifxyzMetadataTests(unittest.TestCase):
             patch = load_tifxyz(root)
 
             self.assertEqual(patch.erosion_cells(7), 7)
+
+
+class TrustedGeometryIndexTests(unittest.TestCase):
+    def test_resident_session_keeps_index_for_future_unverified_hints(self):
+        self.assertTrue(needs_trusted_geometry_index(False, False, True))
+
+    def test_batch_session_without_untrusted_inputs_can_release_index(self):
+        self.assertFalse(needs_trusted_geometry_index(False, False, False))
+
+    def test_existing_unverified_patches_or_tracks_require_index(self):
+        self.assertTrue(needs_trusted_geometry_index(True, False, False))
+        self.assertTrue(needs_trusted_geometry_index(False, True, False))
 
 
 class ShellOuterWindingIdxResolutionTests(unittest.TestCase):

@@ -7,6 +7,8 @@
 #include <QDateTime>
 #include <QTextStream>
 #include <QMessageBox>
+#include <QPointer>
+#include <QTimer>
 #include <QClipboard>
 #include <QApplication>
 
@@ -217,6 +219,8 @@ void CommandLineToolRunner::setRenderAdvanced(
 bool CommandLineToolRunner::execute(Tool tool, ExecutionOptions options)
 {
     const int ompThreads = std::exchange(_nextOmpThreads, -1);
+    const QString cancellationFile =
+        std::exchange(_nextCancellationFile, QString());
     const bool isCustom = (tool == Tool::CustomCommand);
     const auto warn = [&](const QString& title, const QString& message) {
         if (options.presentation == Presentation::Interactive) {
@@ -334,6 +338,10 @@ bool CommandLineToolRunner::execute(Tool tool, ExecutionOptions options)
     _executionOptions = options;
     _terminalReported = false;
     _pendingProcessError.clear();
+    _activeCancellationFile = cancellationFile;
+    if (!_activeCancellationFile.isEmpty()) {
+        QFile::remove(_activeCancellationFile);
+    }
 
     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
     QString toolBaseName = QFileInfo(toolCmd).baseName();
@@ -455,10 +463,28 @@ bool CommandLineToolRunner::executeCustomCommand(const QString& command,
     return execute(Tool::CustomCommand, options);
 }
 
+void CommandLineToolRunner::setNextCancellationFile(const QString& path)
+{
+    _nextCancellationFile = path;
+}
+
 void CommandLineToolRunner::cancel()
 {
     if (_process && _process->state() != QProcess::NotRunning) {
+        if (!_activeCancellationFile.isEmpty()) {
+            QFile marker(_activeCancellationFile);
+            if (marker.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                marker.write("cancel\n");
+                marker.close();
+                return;
+            }
+        }
         _process->terminate();
+        QPointer<QProcess> process(_process);
+        QTimer::singleShot(1000, this, [process]() {
+            if (process && process->state() != QProcess::NotRunning)
+                process->kill();
+        });
     }
 }
 
@@ -539,6 +565,10 @@ void CommandLineToolRunner::finishExecution(bool success,
     // A toolFinished handler may synchronously start another process.
     _completionOptions = _executionOptions;
     _executionOptions = {};
+    if (!_activeCancellationFile.isEmpty()) {
+        QFile::remove(_activeCancellationFile);
+        _activeCancellationFile.clear();
+    }
     _deliveringCompletion = true;
     emit toolFinished(
         _currentTool, success, message, outputPath, copyToClipboard);
@@ -783,7 +813,11 @@ QString CommandLineToolRunner::toolName(Tool tool) const
     QString basePath = QCoreApplication::applicationDirPath() + "/";
     switch (tool) {
         case Tool::RenderTifXYZ:
+#ifdef Q_OS_WIN
+            return basePath + "vc_render_tifxyz.exe";
+#else
             return basePath + "vc_render_tifxyz";
+#endif
 
         case Tool::GrowSegFromSegment:
             return basePath + "vc_grow_seg_from_segments";

@@ -9,6 +9,8 @@
 
 #include <QDialog>
 
+#include <array>
+
 class QCheckBox;
 class QDoubleSpinBox;
 class QRadioButton;
@@ -21,10 +23,16 @@ class FiestaCleanDialog : public QDialog
 public:
     // `api` supplies the library defaults; `allowInPlace` shows the
     // overwrite-original result mode (disk backup + saveOverwrite).
-    FiestaCleanDialog(QWidget* parent, const sf_api* api, bool allowInPlace);
+    FiestaCleanDialog(
+        QWidget* parent, const sf_api* api, bool allowInPlace,
+        std::array<double, 3> suggestedAxisPointZyx = {0.0, 0.0, 0.0});
 
     sf_cleanup_config config() const;
     bool overwriteOriginal() const;
+    QString axisPointZyx() const;
+    QString axisDirectionZyx() const;
+    double wrapSpacing() const;
+    bool addToCurrentFit() const;
 
     void accept() override;
 
@@ -37,6 +45,10 @@ private:
     QDoubleSpinBox* _spCull{nullptr};
     QRadioButton* _rbNewSegment{nullptr};
     QRadioButton* _rbOverwrite{nullptr};
+    std::array<QDoubleSpinBox*, 3> _spAxisPoint{{nullptr, nullptr, nullptr}};
+    std::array<QDoubleSpinBox*, 3> _spAxisDirection{{nullptr, nullptr, nullptr}};
+    QDoubleSpinBox* _spWrapSpacing{nullptr};
+    QCheckBox* _cbAddToFit{nullptr};
 
     static bool s_haveSession;
     static bool s_manifold;
@@ -44,6 +56,11 @@ private:
     static bool s_sliver;
     static double s_cullFrac;
     static bool s_overwrite;
+    static bool s_haveHintGeometry;
+    static std::array<double, 3> s_axisPoint;
+    static std::array<double, 3> s_axisDirection;
+    static double s_wrapSpacing;
+    static bool s_addToFit;
 };
 
 class FiestaDetangleDialog : public QDialog

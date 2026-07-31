@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 import glob
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -135,10 +136,32 @@ class SpiralRunConfig:
 @dataclass(frozen=True)
 class SpiralPreviewConfig:
     first_winding: int = 10
+    last_winding: int | None = None
+    output_step_vx: float = 20.0
     variant: str = "raw"
 
     def manifest(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def validate_preview_config(preview: SpiralPreviewConfig) -> list[dict[str, str]]:
+    """Validate export-only settings before allocating a resident fit."""
+    errors: list[dict[str, str]] = []
+    if preview.first_winding < 0:
+        errors.append({"field": "preview.first_winding", "message": "Must be non-negative"})
+    if (preview.last_winding is not None
+            and preview.last_winding < preview.first_winding):
+        errors.append({
+            "field": "preview.last_winding",
+            "message": "Must be at or above first_winding",
+        })
+    if (not math.isfinite(preview.output_step_vx)
+            or preview.output_step_vx <= 0.0):
+        errors.append({
+            "field": "preview.output_step_vx",
+            "message": "Must be a finite positive number",
+        })
+    return errors
 
 
 @dataclass
@@ -442,8 +465,11 @@ def parse_session_request(value: Mapping[str, Any]) -> tuple[SpiralInputPaths, S
     paths = SpiralInputPaths.from_mapping(value.get("paths", {}))
     run = SpiralRunConfig.from_mapping(value.get("run", {}))
     preview_map = value.get("preview", {})
+    last_winding = preview_map.get("last_winding")
     preview = SpiralPreviewConfig(
         first_winding=int(preview_map.get("first_winding", 10)),
+        last_winding=None if last_winding is None else int(last_winding),
+        output_step_vx=float(preview_map.get("output_step_vx", 20.0)),
         variant=str(preview_map.get("variant", "raw")),
     )
     return paths, run, preview

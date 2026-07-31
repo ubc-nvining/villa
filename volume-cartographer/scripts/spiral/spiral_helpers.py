@@ -25,6 +25,12 @@ def patch_intersects_z_roi(patch, z_begin, z_end):
     return bool(((zs >= z_begin) & (zs < z_end)).any().item())
 
 
+def needs_trusted_geometry_index(
+        has_unverified_patches, using_tracks, interactive_session):
+    """Whether later work can query the trusted verified-geometry index."""
+    return bool(has_unverified_patches or using_tracks or interactive_session)
+
+
 def scale_counts_for_z_range(
     config,
     z_begin,
@@ -843,6 +849,8 @@ def save_combined_preview(
     *,
     surface_id,
     progress=None,
+    first_winding=None,
+    last_winding=None,
 ):
     """Write the authoritative connected preview used by VC3D and Lasagna."""
     (_, derived_upper), _, _ = compute_winding_range_and_input_extents(
@@ -862,11 +870,19 @@ def save_combined_preview(
         configured_upper = int(configured_outer) + 1
         exclusive_upper = (configured_upper if derived_upper <= int(cfg['output_first_winding'])
                            else min(exclusive_upper, configured_upper))
-    first_winding = 10
-    last_winding = int(exclusive_upper) - 1
+    first_winding = int(
+        cfg['output_first_winding'] if first_winding is None else first_winding)
+    derived_last_winding = int(exclusive_upper) - 1
+    last_winding = (derived_last_winding if last_winding is None
+                    else int(last_winding))
+    if configured_outer is not None and last_winding > int(configured_outer):
+        raise RuntimeError(
+            f'Preview last winding {last_winding} exceeds configured outer winding '
+            f'{int(configured_outer)}'
+        )
     if last_winding < first_winding:
         raise RuntimeError(
-            f'No preview winding is at or above {first_winding}; derived last winding is {last_winding}'
+            f'No preview winding is at or above {first_winding}; last winding is {last_winding}'
         )
 
     grid_spacing = int(cfg['output_step_size'])
